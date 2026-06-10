@@ -3,8 +3,10 @@ const crypto = require('crypto');
 const router = express.Router();
 const User = require('../models/User');
 const nodemailer = require('nodemailer');
+require('dotenv').config();
 
-const ADMIN_EMAIL = 'anuradhagupta1829@gmail.com';
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL;
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
 
 // Nodemailer SMTP Transporter
 const transporter = nodemailer.createTransport({
@@ -40,7 +42,7 @@ router.post('/signup', async (req, res) => {
         const normalizedEmail = email.toLowerCase();
         // Admin signup – enforce fixed credentials and skip OTP
         if (role === 'admin') {
-            const adminHash = hashPassword('Anuradha@1829');
+            const adminHash = hashPassword(ADMIN_PASSWORD);
             if (normalizedEmail !== ADMIN_EMAIL.toLowerCase() || hashPassword(password) !== adminHash) {
                 return res.status(403).json({ message: 'Invalid admin credentials.' });
             }
@@ -71,7 +73,7 @@ router.post('/signup/initiate', async (req, res) => {
 
         // If registration role is admin, enforce fixed credentials first
         if (role === 'admin') {
-            const adminHash = hashPassword('Anuradha@1829');
+            const adminHash = hashPassword(ADMIN_PASSWORD);
             if (normalizedEmail !== ADMIN_EMAIL.toLowerCase() || hashedPassword !== adminHash) {
                 return res.status(400).json({ message: 'Invalid admin credentials.' });
             }
@@ -199,7 +201,7 @@ router.post('/login', async (req, res) => {
 
         // Fixed Admin Direct Login
         if (normalizedEmail === ADMIN_EMAIL.toLowerCase()) {
-            const adminHash = hashPassword('Anuradha@1829');
+            const adminHash = hashPassword(ADMIN_PASSWORD);
             if (hashPassword(password) === adminHash) {
                 return res.status(200).json({
                     message: 'Login successful',
