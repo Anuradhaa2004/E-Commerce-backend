@@ -8,10 +8,20 @@ const ADMIN_EMAIL = 'anuradhagupta1829@gmail.com';
 
 // Nodemailer SMTP Transporter
 const transporter = nodemailer.createTransport({
-    service: 'gmail',
+    host: 'smtp.gmail.com',
+    port: 587,
+    secure: false,
+    family: 4,
     auth: {
-        user: process.env.SMTP_USER || 'anuradhagupta1829@gmail.com',
-        pass: process.env.SMTP_PASS || 'zkunkgprnqflreqy'
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASS
+    }
+});
+transporter.verify((err, success) => {
+    if (err) {
+        console.log("SMTP ERROR:", err);
+    } else {
+        console.log("SMTP READY");
     }
 });
 

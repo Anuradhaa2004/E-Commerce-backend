@@ -44,9 +44,9 @@ cloudinary.config({
 
 // Helper function to upload file to Cloudinary and delete local temp file
 const uploadToCloudinary = async (file) => {
-    const isCloudinaryConfigured = process.env.CLOUDINARY_CLOUD_NAME && 
-                                   process.env.CLOUDINARY_API_KEY && 
-                                   process.env.CLOUDINARY_API_SECRET;
+    const isCloudinaryConfigured = process.env.CLOUDINARY_CLOUD_NAME &&
+        process.env.CLOUDINARY_API_KEY &&
+        process.env.CLOUDINARY_API_SECRET;
 
     if (isCloudinaryConfigured) {
         try {
@@ -60,17 +60,17 @@ const uploadToCloudinary = async (file) => {
             return result.secure_url;
         } catch (err) {
             console.error('Error uploading file to Cloudinary, falling back to local storage:', err);
-            return `http://localhost:5000/uploads/${file.filename}`;
+            return `${req.protocol}://${req.get('host')}/uploads/${file.filename}`;
         }
     } else {
-        return `http://localhost:5000/uploads/${file.filename}`;
+        return `${req.protocol}://${req.get('host')}/uploads/${file.filename}`;
     }
 };
 
 // 1. Add new product (POST) — accepts up to 10 images
 router.post('/add', upload.array('images', 10), async (req, res) => {
     try {
-        const imageUrls = req.files 
+        const imageUrls = req.files
             ? await Promise.all(req.files.map(file => uploadToCloudinary(file)))
             : [];
         const imageUrl = imageUrls.length > 0 ? imageUrls[0] : '';
@@ -108,17 +108,17 @@ router.get('/', async (req, res) => {
 
 // Delete a product by ID
 router.delete('/delete/:id', async (req, res) => {
-  console.log('Delete request received for ID:', req.params.id);
-  try {
-    const deleted = await Product.findByIdAndDelete(req.params.id);
-    if (!deleted) {
-      return res.status(404).json({ message: 'Product not found' });
+    console.log('Delete request received for ID:', req.params.id);
+    try {
+        const deleted = await Product.findByIdAndDelete(req.params.id);
+        if (!deleted) {
+            return res.status(404).json({ message: 'Product not found' });
+        }
+        res.status(200).json({ message: 'Product deleted', id: req.params.id });
+    } catch (err) {
+        console.error('Error deleting product:', err);
+        res.status(500).json({ message: 'Failed to delete product', error: err.message });
     }
-    res.status(200).json({ message: 'Product deleted', id: req.params.id });
-  } catch (err) {
-    console.error('Error deleting product:', err);
-    res.status(500).json({ message: 'Failed to delete product', error: err.message });
-  }
 });
 
 // Add review to product (POST)
@@ -134,7 +134,7 @@ router.post('/:id/review', upload.array('images', 5), async (req, res) => {
             return res.status(404).json({ message: 'Product not found' });
         }
 
-        const reviewImages = req.files 
+        const reviewImages = req.files
             ? await Promise.all(req.files.map(file => uploadToCloudinary(file)))
             : [];
 
@@ -198,7 +198,7 @@ router.put('/edit/:id', upload.array('images', 10), async (req, res) => {
         }
 
         // Append new uploaded images
-        const newImageUrls = req.files 
+        const newImageUrls = req.files
             ? await Promise.all(req.files.map(file => uploadToCloudinary(file)))
             : [];
         product.imageUrls = [...currentUrls, ...newImageUrls];
@@ -213,4 +213,4 @@ router.put('/edit/:id', upload.array('images', 10), async (req, res) => {
     }
 });
 
-module.exports = router;
+module.exports = router;
