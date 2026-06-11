@@ -32,6 +32,10 @@ const hashPassword = (password) => {
     return crypto.createHash('sha256').update(password).digest('hex');
 };
 
+const isDuplicateKeyError = (error) => {
+    return error && error.code === 11000;
+};
+
 // Signup Route (Legacy or Admin-only)
 router.post('/signup', async (req, res) => {
     try {
@@ -90,6 +94,7 @@ router.post('/signup/initiate', async (req, res) => {
             }
             // If user exists but is not verified, update details, new OTP and expiration
             user.name = name;
+            user.email = normalizedEmail;
             user.password = hashedPassword;
             user.mobile = fullNumber;
             user.otp = otpCode;
@@ -130,14 +135,41 @@ router.post('/signup/initiate', async (req, res) => {
             `
         };
 
-        await transporter.sendMail(mailOptions);
+        // await transporter.sendMail(mailOptions);
 
-        res.status(200).json({ message: 'OTP sent to your email.', userId: user._id });
+        // res.status(200).json({ message: 'OTP sent to your email.', userId: user._id });
+        console.log("========== EMAIL DEBUG ==========");
+        console.log("Sending OTP to:", normalizedEmail);
+        console.log("SMTP User:", process.env.SMTP_USER);
+
+        const info = await transporter.sendMail(mailOptions);
+
+console.log("MAIL SENT SUCCESSFULLY");
+console.log("Message ID:", info.messageId);
+console.log("Response:", info.response);
+console.log("=================================");
+
+res.status(200).json({
+    message: 'OTP sent to your email.',
+    userId: user._id
+});
     } catch (error) {
         console.error('Email OTP initiate error:', error);
+        if (isDuplicateKeyError(error)) {
+            return res.status(409).json({
+                message: 'This email is already registered. If you already started signup, please wait for the OTP or request a new one.',
+                details: 'Duplicate email found in database.'
+            });
+        }
+
+        const details = error.message || 'Unknown error';
+        const smtpHelp = details.toLowerCase().includes('invalid login') || details.toLowerCase().includes('authentication')
+            ? ' Please verify SMTP_USER/SMTP_PASS or use a Gmail App Password for Gmail SMTP.'
+            : '';
+
         res.status(500).json({
             message: 'Failed to send OTP email.',
-            details: error.message + ' (Please check if App Password is required for Gmail SMTP)'
+            details: details + smtpHelp
         });
     }
 });
