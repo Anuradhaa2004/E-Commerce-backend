@@ -10,18 +10,19 @@ const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
 
 // Nodemailer SMTP Transporter
 const transporter = nodemailer.createTransport({
-    service: "gmail",
+    host: "smtp.gmail.com",
+    port: 587,
+    secure: false,
+    family: 4,
+    requireTLS: true,
     auth: {
         user: process.env.SMTP_USER,
         pass: process.env.SMTP_PASS
-    },
-    connectionTimeout: 60000,
-    greetingTimeout: 30000,
-    socketTimeout: 60000
+    }
 });
-transporter.verify((err, success) => {
-    if (err) {
-        console.log("SMTP ERROR:", err);
+transporter.verify(function (error, success) {
+    if (error) {
+        console.error("SMTP VERIFY ERROR:", error);
     } else {
         console.log("SMTP READY");
     }
