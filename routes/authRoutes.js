@@ -4,7 +4,7 @@ const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'anuradhagupta1829@gmail.com';
-const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || 'ridhika-enterprises-2023';
+const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || 'e-commerce-20b88';
 
 // Cache for Google's public certificates
 let publicKeys = {};
