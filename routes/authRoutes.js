@@ -1,214 +1,117 @@
 const express = require('express');
-const crypto = require('crypto');
 const router = express.Router();
+const jwt = require('jsonwebtoken');
 const User = require('../models/User');
-const nodemailer = require('nodemailer');
-require('dotenv').config();
 
-const ADMIN_EMAIL = process.env.ADMIN_EMAIL;
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'anuradhagupta1829@gmail.com';
+const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || 'ridhika-enterprises-2023';
 
-// Nodemailer SMTP Transporter
-const transporter = nodemailer.createTransport({
-    host: "smtp.gmail.com",
-    port: 587,
-    secure: false,
-    family: 4,
-    requireTLS: true,
-    auth: {
-        user: process.env.SMTP_USER,
-        pass: process.env.SMTP_PASS
+// Cache for Google's public certificates
+let publicKeys = {};
+let keysExpiry = 0;
+
+const getGooglePublicKeys = async () => {
+    if (Date.now() < keysExpiry && Object.keys(publicKeys).length > 0) {
+        return publicKeys;
     }
-});
-transporter.verify(function (error, success) {
-    if (error) {
-        console.error("SMTP VERIFY ERROR:", error);
-    } else {
-        console.log("SMTP READY");
+    try {
+        const response = await fetch('https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com');
+        const data = await response.json();
+        
+        // Parse cache control header
+        const cacheControl = response.headers.get('cache-control');
+        if (cacheControl) {
+            const maxAgeMatch = cacheControl.match(/max-age=(\d+)/);
+            if (maxAgeMatch) {
+                keysExpiry = Date.now() + parseInt(maxAgeMatch[1]) * 1000;
+            }
+        }
+        publicKeys = data;
+        return publicKeys;
+    } catch (err) {
+        console.error("Error fetching Google public keys:", err);
+        throw new Error("Failed to fetch Google public keys for verification.");
     }
-});
-
-// Helper to hash passwords using standard built-in crypto
-const hashPassword = (password) => {
-    return crypto.createHash('sha256').update(password).digest('hex');
 };
 
-const isDuplicateKeyError = (error) => {
-    return error && error.code === 11000;
+const verifyFirebaseToken = async (idToken) => {
+    if (!idToken) {
+        throw new Error('No token provided');
+    }
+    const decodedHeader = jwt.decode(idToken, { complete: true });
+    if (!decodedHeader || !decodedHeader.header || !decodedHeader.header.kid) {
+        throw new Error('Invalid token format');
+    }
+    
+    const kid = decodedHeader.header.kid;
+    const keys = await getGooglePublicKeys();
+    const publicKey = keys[kid];
+    
+    if (!publicKey) {
+        throw new Error('Matching public key not found');
+    }
+    
+    return jwt.verify(idToken, publicKey, {
+        algorithms: ['RS256'],
+        audience: FIREBASE_PROJECT_ID,
+        issuer: `https://securetoken.google.com/${FIREBASE_PROJECT_ID}`
+    });
 };
 
-// Signup Route (Legacy or Admin-only)
-router.post('/signup', async (req, res) => {
+// Google Login Route
+router.post('/google-login', async (req, res) => {
     try {
-        const { name, email, password, role = 'user' } = req.body;
-        if (!name || !email || !password) {
-            return res.status(400).json({ message: 'All fields are required.' });
+        const { idToken } = req.body;
+        if (!idToken) {
+            return res.status(400).json({ message: 'Firebase ID Token is required.' });
         }
+        
+        // Verify Firebase Token
+        const decodedToken = await verifyFirebaseToken(idToken);
+        const { email, name, email_verified } = decodedToken;
+        
+        if (!email) {
+            return res.status(400).json({ message: 'Token payload does not contain an email address.' });
+        }
+        if (!email_verified) {
+            return res.status(400).json({ message: 'Google email is not verified.' });
+        }
+        
         const normalizedEmail = email.toLowerCase();
-        // Admin signup – enforce fixed credentials and skip OTP
-        if (role === 'admin') {
-            const adminHash = hashPassword(ADMIN_PASSWORD);
-            if (normalizedEmail !== ADMIN_EMAIL.toLowerCase() || hashPassword(password) !== adminHash) {
-                return res.status(403).json({ message: 'Invalid admin credentials.' });
-            }
-            const existingAdmin = await User.findOne({ email: ADMIN_EMAIL });
-            if (existingAdmin) {
-                return res.status(400).json({ message: 'Admin account already exists.' });
-            }
-        }
-        // Regular user signup without OTP is disabled – respond with instruction
-        return res.status(400).json({ message: 'Use /signup/initiate for user registration with OTP.' });
-    } catch (error) {
-        console.error('Signup error:', error);
-        res.status(500).json({ message: 'Server error during signup.' });
-    }
-});
-
-// ----- OTP based signup flow (Email OTP) -----
-// Step 1: Initiate signup – create user entry (unverified), generate 6-digit code, send via email
-router.post('/signup/initiate', async (req, res) => {
-    try {
-        const { name, email, password, role = 'user', countryCode, mobile } = req.body;
-        if (!name || !email || !password || !countryCode || !mobile) {
-            return res.status(400).json({ message: 'All fields including country code and mobile are required.' });
-        }
-        const normalizedEmail = email.toLowerCase();
-        const fullNumber = `${countryCode}${mobile}`; // e.g., +91xxxxxxxxxx
-        const hashedPassword = hashPassword(password);
-
-        // If registration role is admin, enforce fixed credentials first
-        if (role === 'admin') {
-            const adminHash = hashPassword(ADMIN_PASSWORD);
-            if (normalizedEmail !== ADMIN_EMAIL.toLowerCase() || hashedPassword !== adminHash) {
-                return res.status(400).json({ message: 'Invalid admin credentials.' });
-            }
-        }
-
-        // Generate a 6-digit OTP
-        const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
-        const otpExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes from now
-
+        
+        // Determine role (admin if matching ADMIN_EMAIL env)
+        const role = (normalizedEmail === ADMIN_EMAIL.toLowerCase()) ? 'admin' : 'user';
+        
+        // Find or create user
         let user = await User.findOne({ email: normalizedEmail });
-        if (user) {
-            if (user.isVerified) {
-                return res.status(400).json({ message: 'User already exists with this email.' });
-            }
-            // If user exists but is not verified, update details, new OTP and expiration
-            user.name = name;
-            user.email = normalizedEmail;
-            user.password = hashedPassword;
-            user.mobile = fullNumber;
-            user.otp = otpCode;
-            user.otpExpires = otpExpires;
-            await user.save();
-        } else {
-            // Create user but mark as not verified yet
-            user = new User({
-                name,
-                email: normalizedEmail,
-                password: hashedPassword,
-                role,
-                mobile: fullNumber,
-                isVerified: false,
-                otp: otpCode,
-                otpExpires: otpExpires
-            });
-            await user.save();
-        }
-
-        // Send Email
-        const mailOptions = {
-            from: `"Ridhika Enterprises" <${process.env.SMTP_USER || 'Ridhikaenterprises2023@gmail.com'}>`,
-            to: normalizedEmail,
-            subject: 'Verify Your Email - OTP Verification',
-            html: `
-                <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px;">
-                    <h2 style="color: #c49a45; text-align: center;">Ridhika Enterprises</h2>
-                    <p>Hello <strong>${name}</strong>,</p>
-                    <p>Thank you for registering. Please use the following One-Time Password (OTP) to verify your account. This code is valid for 10 minutes.</p>
-                    <div style="background-color: #f9f9f9; border: 1px dashed #c49a45; padding: 15px; text-align: center; font-size: 24px; font-weight: bold; letter-spacing: 4px; color: #333; margin: 20px 0;">
-                        ${otpCode}
-                    </div>
-                    <p>If you did not request this code, please ignore this email.</p>
-                    <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;" />
-                    <p style="font-size: 12px; color: #888; text-align: center;">This is an automated email. Please do not reply directly.</p>
-                </div>
-            `
-        };
-
-        // await transporter.sendMail(mailOptions);
-
-        // res.status(200).json({ message: 'OTP sent to your email.', userId: user._id });
-        console.log("========== EMAIL DEBUG ==========");
-        console.log("Sending OTP to:", normalizedEmail);
-        console.log("SMTP User:", process.env.SMTP_USER);
-
-        const info = await transporter.sendMail(mailOptions);
-
-console.log("MAIL SENT SUCCESSFULLY");
-console.log("Message ID:", info.messageId);
-console.log("Response:", info.response);
-console.log("=================================");
-
-res.status(200).json({
-    message: 'OTP sent to your email.',
-    userId: user._id
-});
-    } catch (error) {
-        console.error('Email OTP initiate error:', error);
-        if (isDuplicateKeyError(error)) {
-            return res.status(409).json({
-                message: 'This email is already registered. If you already started signup, please wait for the OTP or request a new one.',
-                details: 'Duplicate email found in database.'
-            });
-        }
-
-        const details = error.message || 'Unknown error';
-        const smtpHelp = details.toLowerCase().includes('invalid login') || details.toLowerCase().includes('authentication')
-            ? ' Please verify SMTP_USER/SMTP_PASS or use a Gmail App Password for Gmail SMTP.'
-            : '';
-
-        res.status(500).json({
-            message: 'Failed to send OTP email.',
-            details: details + smtpHelp
-        });
-    }
-});
-
-// Step 2: Verify OTP – confirm code and activate account
-router.post('/signup/verify', async (req, res) => {
-    try {
-        const { userId, otp } = req.body;
-        if (!userId || !otp) {
-            return res.status(400).json({ message: 'userId and otp are required.' });
-        }
-        const user = await User.findById(userId);
         if (!user) {
-            return res.status(404).json({ message: 'User not found.' });
+            user = new User({
+                name: name || 'Google User',
+                email: normalizedEmail,
+                role: role,
+                isVerified: true,
+                createdAt: new Date()
+            });
+            await user.save();
+            console.log(`Created new user: ${normalizedEmail} with role ${role}`);
+        } else {
+            // Update details or role if needed
+            let isModified = false;
+            if (user.role !== role) {
+                user.role = role;
+                isModified = true;
+            }
+            if (!user.isVerified) {
+                user.isVerified = true;
+                isModified = true;
+            }
+            if (isModified) {
+                await user.save();
+            }
         }
-
-        // Verify OTP
-        if (!user.otp || !user.otpExpires) {
-            return res.status(400).json({ message: 'No active OTP session found. Please request a new OTP.' });
-        }
-
-        if (new Date() > user.otpExpires) {
-            return res.status(400).json({ message: 'OTP has expired. Please request a new one.' });
-        }
-
-        if (user.otp !== otp.trim()) {
-            return res.status(400).json({ message: 'Invalid OTP code.' });
-        }
-
-        // Clear OTP and mark user as verified
-        user.isVerified = true;
-        user.otp = undefined;
-        user.otpExpires = undefined;
-        await user.save();
-
-        // Return auth payload (same shape as login)
+        
         res.status(200).json({
-            message: 'Registration successful',
+            message: 'Login successful',
             user: {
                 id: user._id,
                 name: user.name,
@@ -218,65 +121,11 @@ router.post('/signup/verify', async (req, res) => {
             }
         });
     } catch (error) {
-        console.error('Email OTP verification error:', error);
-        res.status(500).json({ message: 'Server error during OTP verification.', details: error.message });
-    }
-});
-
-// Login Route
-router.post('/login', async (req, res) => {
-    try {
-        const { email, password } = req.body;
-        if (!email || !password) {
-            return res.status(400).json({ message: 'Email and password are required.' });
-        }
-        const normalizedEmail = email.toLowerCase();
-
-        // Fixed Admin Direct Login
-        if (normalizedEmail === ADMIN_EMAIL.toLowerCase()) {
-            const adminHash = hashPassword(ADMIN_PASSWORD);
-            if (hashPassword(password) === adminHash) {
-                return res.status(200).json({
-                    message: 'Login successful',
-                    user: {
-                        id: 'admin-fixed-id',
-                        name: 'Admin',
-                        email: ADMIN_EMAIL,
-                        role: 'admin',
-                        mobile: '+919999999999'
-                    }
-                });
-            } else {
-                return res.status(400).json({ message: 'Invalid credentials.' });
-            }
-        }
-
-        const user = await User.findOne({ email: normalizedEmail });
-        if (!user) {
-            return res.status(400).json({ message: 'Invalid credentials.' });
-        }
-        const hashedPassword = hashPassword(password);
-        if (user.password !== hashedPassword) {
-            return res.status(400).json({ message: 'Invalid credentials.' });
-        }
-        // Prevent login for unverified regular users
-        if (user.role !== 'admin' && !user.isVerified) {
-            return res.status(403).json({ message: 'Account not verified. Complete OTP verification.' });
-        }
-        const userRole = normalizedEmail === ADMIN_EMAIL ? 'admin' : user.role;
-        res.status(200).json({
-            message: 'Login successful',
-            user: {
-                id: user._id,
-                name: user.name,
-                email: user.email,
-                role: userRole,
-                mobile: user.mobile
-            }
+        console.error('Google Sign-in/Login error:', error);
+        res.status(401).json({
+            message: 'Authentication failed.',
+            details: error.message
         });
-    } catch (error) {
-        console.error('Login error:', error);
-        res.status(500).json({ message: 'Server error during login.' });
     }
 });
 
