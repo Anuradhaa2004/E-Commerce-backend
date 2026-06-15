@@ -1,7 +1,6 @@
-// backend/routes/shipwayRoutes.js
 const express = require('express');
 const router = express.Router();
-const { createShipment } = require('../services/shipwayService'); // Service ko import kiya
+const { createShipment } = require('../services/shipwayService');
 
 router.post('/create-shipment', async (req, res) => {
     try {
@@ -12,4 +11,4 @@ router.post('/create-shipment', async (req, res) => {
     }
 });
 
-module.exports = rotate; // Sorry, yahan `module.exports = router;` hona chahiye
+module.exports = router;
