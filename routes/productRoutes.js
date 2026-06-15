@@ -24,14 +24,22 @@ const storage = multer.diskStorage({
 });
 
 const fileFilter = (req, file, cb) => {
-    const allowed = /jpeg|jpg|png|webp|gif/;
-    const ext = allowed.test(path.extname(file.originalname).toLowerCase());
-    const mime = allowed.test(file.mimetype);
-    if (ext && mime) return cb(null, true);
-    cb(new Error('Only image files are allowed!'));
+    const ext = path.extname(file.originalname).toLowerCase();
+    const isImage = /jpeg|jpg|png|webp|gif/.test(ext) || file.mimetype.startsWith('image/');
+    const isVideo = /mp4|webm|ogg|mov|mkv|avi/.test(ext) || file.mimetype.startsWith('video/');
+    if (isImage || isVideo) {
+        return cb(null, true);
+    }
+    cb(new Error('Only image and video files are allowed!'));
 };
 
-const upload = multer({ storage, fileFilter, limits: { fileSize: 10 * 1024 * 1024 } }); // 10MB per file
+const upload = multer({ storage, fileFilter, limits: { fileSize: 100 * 1024 * 1024 } }); // 100MB max for videos
+
+// Middleware to handle multiple files from different fields
+const productUpload = upload.fields([
+    { name: 'images', maxCount: 10 },
+    { name: 'video', maxCount: 1 }
+]);
 
 const cloudinary = require('cloudinary').v2;
 
@@ -43,7 +51,7 @@ cloudinary.config({
 });
 
 // Helper function to upload file to Cloudinary and delete local temp file
-const uploadToCloudinary = async (file) => {
+const uploadToCloudinary = async (file, req) => {
     const isCloudinaryConfigured = process.env.CLOUDINARY_CLOUD_NAME &&
         process.env.CLOUDINARY_API_KEY &&
         process.env.CLOUDINARY_API_SECRET;
@@ -51,7 +59,8 @@ const uploadToCloudinary = async (file) => {
     if (isCloudinaryConfigured) {
         try {
             const result = await cloudinary.uploader.upload(file.path, {
-                folder: 'ecommerce-products'
+                folder: 'ecommerce-products',
+                resource_type: 'auto'
             });
             // Delete the local temporary file
             if (fs.existsSync(file.path)) {
@@ -60,21 +69,30 @@ const uploadToCloudinary = async (file) => {
             return result.secure_url;
         } catch (err) {
             console.error('Error uploading file to Cloudinary, falling back to local storage:', err);
-            return `${req.protocol}://${req.get('host')}/uploads/${file.filename}`;
+            const host = req ? req.get('host') : 'localhost:5000';
+            const protocol = req ? req.protocol : 'http';
+            return `${protocol}://${host}/uploads/${file.filename}`;
         }
     } else {
-        return `${req.protocol}://${req.get('host')}/uploads/${file.filename}`;
+        const host = req ? req.get('host') : 'localhost:5000';
+        const protocol = req ? req.protocol : 'http';
+        return `${protocol}://${host}/uploads/${file.filename}`;
     }
 };
 
 // 1. Add new product (POST) — accepts up to 10 images
-router.post('/add', upload.array('images', 10), async (req, res) => {
+router.post('/add', productUpload, async (req, res) => {
     try {
-        const imageUrls = req.files
-            ? await Promise.all(req.files.map(file => uploadToCloudinary(file)))
-            : [];
+        const imageFiles = req.files && req.files.images ? req.files.images : [];
+        const videoFiles = req.files && req.files.video ? req.files.video : [];
+
+        const imageUrls = await Promise.all(imageFiles.map(file => uploadToCloudinary(file, req)));
         const imageUrl = imageUrls.length > 0 ? imageUrls[0] : '';
 
+        let videoUrl = '';
+        if (videoFiles.length > 0) {
+            videoUrl = await uploadToCloudinary(videoFiles[0], req);
+        }
 
         const newProduct = new Product({
             name: req.body.name,
@@ -85,7 +103,8 @@ router.post('/add', upload.array('images', 10), async (req, res) => {
             availableSizes: req.body.availableSizes ? (Array.isArray(req.body.availableSizes) ? req.body.availableSizes : [req.body.availableSizes]) : [],
             availableColors: req.body.availableColors ? (Array.isArray(req.body.availableColors) ? req.body.availableColors : [req.body.availableColors]) : [],
             imageUrl: imageUrl,
-            imageUrls: imageUrls
+            imageUrls: imageUrls,
+            videoUrl: videoUrl
         });
 
         const savedProduct = await newProduct.save();
@@ -160,7 +179,7 @@ router.post('/:id/review', upload.array('images', 5), async (req, res) => {
 });
 
 // Update an existing product (PUT)
-router.put('/edit/:id', upload.array('images', 10), async (req, res) => {
+router.put('/edit/:id', productUpload, async (req, res) => {
     try {
         const product = await Product.findById(req.params.id);
         if (!product) {
@@ -198,12 +217,19 @@ router.put('/edit/:id', upload.array('images', 10), async (req, res) => {
         }
 
         // Append new uploaded images
-        const newImageUrls = req.files
-            ? await Promise.all(req.files.map(file => uploadToCloudinary(file)))
-            : [];
+        const imageFiles = req.files && req.files.images ? req.files.images : [];
+        const videoFiles = req.files && req.files.video ? req.files.video : [];
+
+        const newImageUrls = await Promise.all(imageFiles.map(file => uploadToCloudinary(file, req)));
         product.imageUrls = [...currentUrls, ...newImageUrls];
         product.imageUrl = product.imageUrls[0] || '';
 
+        // Handle videoUrl update
+        if (videoFiles.length > 0) {
+            product.videoUrl = await uploadToCloudinary(videoFiles[0], req);
+        } else if (req.body.existingVideoUrl !== undefined) {
+            product.videoUrl = req.body.existingVideoUrl;
+        }
 
         const updatedProduct = await product.save();
         res.status(200).json(updatedProduct);
