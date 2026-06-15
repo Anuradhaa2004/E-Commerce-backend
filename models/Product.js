@@ -6,7 +6,8 @@ const productSchema = new mongoose.Schema({
     price: { type: Number, required: true },
     category: { type: String, required: true },
     imageUrl: { type: String }, // First image as fallback
-    imageUrls: { type: [String], default: [] }, // Array of all uploaded images from different angles
+    imageUrls: { type: [String], default: [] },
+    videoUrl: { type: String },
     stock: { type: Number, default: 0 }, // Stock quantity
     availableSizes: { type: [String], default: [] }, // Sizes available for the product
     availableColors: { type: [String], default: [] }, // Colors available for the product
