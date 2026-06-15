@@ -11,6 +11,7 @@ const productRoutes = require('./routes/productRoutes');
 const authRoutes = require('./routes/authRoutes');
 const paymentRoutes = require('./routes/paymentRoutes');
 const cartRoutes = require('./routes/cartRoutes');
+const shipwayRoutes = require('./routes/shipwayRoutes');
 
 const app = express();
 
@@ -24,6 +25,7 @@ app.use('/api/products', productRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/cart', cartRoutes);
+app.use('/api/shipway', shipwayRoutes);
 
 // --- Yahan Cron Job Import Karein ---
 require('./cronJobs');
