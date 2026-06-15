@@ -1,6 +1,6 @@
 const path = require('path');
-console.log('--- Server starting now ---');
-console.log('Routes file path:', path.join(__dirname, 'routes', 'productRoutes.js'));
+// console.log('--- Server starting now ---');
+// console.log('Routes file path:', path.join(__dirname, 'routes', 'productRoutes.js'));
 require('dotenv').config({ path: path.resolve(__dirname, '.env') });
 const express = require('express');
 const mongoose = require('mongoose');
@@ -10,6 +10,7 @@ const cors = require('cors');
 const productRoutes = require('./routes/productRoutes');
 const authRoutes = require('./routes/authRoutes');
 const paymentRoutes = require('./routes/paymentRoutes');
+const cartRoutes = require('./routes/cartRoutes');
 
 const app = express();
 
@@ -22,6 +23,10 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 app.use('/api/products', productRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/payments', paymentRoutes);
+app.use('/api/cart', cartRoutes);
+
+// --- Yahan Cron Job Import Karein ---
+require('./cronJobs');
 
 // Connection logic
 const connectDB = async () => {
