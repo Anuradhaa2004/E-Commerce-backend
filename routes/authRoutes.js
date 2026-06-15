@@ -17,7 +17,7 @@ const getGooglePublicKeys = async () => {
     try {
         const response = await fetch('https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com');
         const data = await response.json();
-        
+
         // Parse cache control header
         const cacheControl = response.headers.get('cache-control');
         if (cacheControl) {
@@ -42,15 +42,15 @@ const verifyFirebaseToken = async (idToken) => {
     if (!decodedHeader || !decodedHeader.header || !decodedHeader.header.kid) {
         throw new Error('Invalid token format');
     }
-    
+
     const kid = decodedHeader.header.kid;
     const keys = await getGooglePublicKeys();
     const publicKey = keys[kid];
-    
+
     if (!publicKey) {
         throw new Error('Matching public key not found');
     }
-    
+
     return jwt.verify(idToken, publicKey, {
         algorithms: ['RS256'],
         audience: FIREBASE_PROJECT_ID,
@@ -65,23 +65,23 @@ router.post('/google-login', async (req, res) => {
         if (!idToken) {
             return res.status(400).json({ message: 'Firebase ID Token is required.' });
         }
-        
+
         // Verify Firebase Token
         const decodedToken = await verifyFirebaseToken(idToken);
         const { email, name, email_verified } = decodedToken;
-        
+
         if (!email) {
             return res.status(400).json({ message: 'Token payload does not contain an email address.' });
         }
         if (!email_verified) {
             return res.status(400).json({ message: 'Google email is not verified.' });
         }
-        
+
         const normalizedEmail = email.toLowerCase();
-        
+
         // Determine role (admin if matching ADMIN_EMAIL env)
         const role = (normalizedEmail === ADMIN_EMAIL.toLowerCase()) ? 'admin' : 'user';
-        
+
         // Find or create user
         let user = await User.findOne({ email: normalizedEmail });
         let isNewUser = false;
@@ -111,10 +111,10 @@ router.post('/google-login', async (req, res) => {
                 await user.save();
             }
         }
-        
+
         // Check if user needs mobile number setup
         const needsMobileSetup = !user.mobile && user.role !== 'admin';
-        
+
         res.status(200).json({
             message: 'Login successful',
             isNewUser: isNewUser || needsMobileSetup,
@@ -142,15 +142,15 @@ router.post('/update-profile', async (req, res) => {
         if (!userId || !mobile) {
             return res.status(400).json({ message: 'User ID and Mobile number are required.' });
         }
-        
+
         const user = await User.findById(userId);
         if (!user) {
             return res.status(404).json({ message: 'User not found.' });
         }
-        
+
         user.mobile = mobile;
         await user.save();
-        
+
         res.status(200).json({
             message: 'Profile updated successfully',
             user: {
