@@ -80,18 +80,128 @@ const uploadToCloudinary = async (file, req) => {
     }
 };
 
+// Helper function to upload file to Cloudinary and delete local temp file ONLY on success
+const uploadToCloudinaryDirect = async (file) => {
+    const isCloudinaryConfigured = process.env.CLOUDINARY_CLOUD_NAME &&
+        process.env.CLOUDINARY_API_KEY &&
+        process.env.CLOUDINARY_API_SECRET;
+
+    if (!isCloudinaryConfigured) {
+        console.log('[Background Upload] Cloudinary is not configured.');
+        return null;
+    }
+
+    try {
+        const result = await cloudinary.uploader.upload(file.path, {
+            folder: 'ecommerce-products',
+            resource_type: 'auto'
+        });
+        
+        // Delete the local temporary file only on successful upload
+        if (fs.existsSync(file.path)) {
+            fs.unlinkSync(file.path);
+        }
+        return result.secure_url;
+    } catch (err) {
+        console.error('Error uploading file to Cloudinary in background:', err);
+        return null;
+    }
+};
+
+// Background processor to handle uploads and DB mapping asynchronously
+const processUploadsInBackground = async (productId, imageFiles, videoFiles, req) => {
+    try {
+        console.log(`[Background Task] Starting Cloudinary uploads for product ${productId}...`);
+        
+        // Upload images to Cloudinary in parallel
+        const cloudinaryImageUrls = await Promise.all(imageFiles.map(file => uploadToCloudinaryDirect(file)));
+        
+        let cloudinaryVideoUrl = '';
+        if (videoFiles.length > 0) {
+            cloudinaryVideoUrl = await uploadToCloudinaryDirect(videoFiles[0]);
+        }
+        
+        // Find product
+        const product = await Product.findById(productId);
+        if (!product) {
+            console.log(`[Background Task] Product ${productId} not found (might have been deleted). Cleaning up files.`);
+            // Clean up files anyway to avoid disk leaks
+            imageFiles.concat(videoFiles).forEach(file => {
+                if (file && file.path && fs.existsSync(file.path)) {
+                    fs.unlinkSync(file.path);
+                }
+            });
+            return;
+        }
+
+        // Map local URLs to Cloudinary URLs in the product's arrays
+        const host = req ? req.get('host') : 'localhost:5000';
+        const protocol = req ? req.protocol : 'http';
+        const localPrefix = `${protocol}://${host}/uploads/`;
+
+        // Update product's imageUrls
+        let urlsUpdated = false;
+        product.imageUrls = product.imageUrls.map(url => {
+            if (url.startsWith(localPrefix)) {
+                const filename = url.substring(localPrefix.length);
+                const fileIndex = imageFiles.findIndex(f => f.filename === filename);
+                if (fileIndex !== -1 && cloudinaryImageUrls[fileIndex]) {
+                    urlsUpdated = true;
+                    return cloudinaryImageUrls[fileIndex];
+                }
+            }
+            return url;
+        });
+
+        // Update main imageUrl if it was a local URL
+        if (product.imageUrl && product.imageUrl.startsWith(localPrefix)) {
+            const filename = product.imageUrl.substring(localPrefix.length);
+            const fileIndex = imageFiles.findIndex(f => f.filename === filename);
+            if (fileIndex !== -1 && cloudinaryImageUrls[fileIndex]) {
+                product.imageUrl = cloudinaryImageUrls[fileIndex];
+                urlsUpdated = true;
+            } else if (product.imageUrls.length > 0) {
+                product.imageUrl = product.imageUrls[0];
+                urlsUpdated = true;
+            }
+        }
+
+        // Update videoUrl if it was local
+        if (product.videoUrl && product.videoUrl.startsWith(localPrefix)) {
+            const filename = product.videoUrl.substring(localPrefix.length);
+            const fileIndex = videoFiles.findIndex(f => f.filename === filename);
+            if (fileIndex !== -1 && cloudinaryVideoUrl) {
+                product.videoUrl = cloudinaryVideoUrl;
+                urlsUpdated = true;
+            }
+        }
+
+        if (urlsUpdated) {
+            await product.save();
+            console.log(`[Background Task] Successfully uploaded and updated product ${productId} with Cloudinary URLs.`);
+        } else {
+            console.log(`[Background Task] No URLs needed to be updated for product ${productId}.`);
+        }
+    } catch (err) {
+        console.error(`[Background Task] Error uploading to Cloudinary in background for product ${productId}:`, err);
+    }
+};
+
 // 1. Add new product (POST) — accepts up to 10 images
 router.post('/add', productUpload, async (req, res) => {
     try {
         const imageFiles = req.files && req.files.images ? req.files.images : [];
         const videoFiles = req.files && req.files.video ? req.files.video : [];
 
-        const imageUrls = await Promise.all(imageFiles.map(file => uploadToCloudinary(file, req)));
-        const imageUrl = imageUrls.length > 0 ? imageUrls[0] : '';
+        // Save local paths first
+        const host = req ? req.get('host') : 'localhost:5000';
+        const protocol = req ? req.protocol : 'http';
 
-        let videoUrl = '';
+        const localImageUrls = imageFiles.map(file => `${protocol}://${host}/uploads/${file.filename}`);
+        const localImageUrl = localImageUrls.length > 0 ? localImageUrls[0] : '';
+        let localVideoUrl = '';
         if (videoFiles.length > 0) {
-            videoUrl = await uploadToCloudinary(videoFiles[0], req);
+            localVideoUrl = `${protocol}://${host}/uploads/${videoFiles[0].filename}`;
         }
 
         const newProduct = new Product({
@@ -102,13 +212,18 @@ router.post('/add', productUpload, async (req, res) => {
             stock: parseInt(req.body.stock) || 0,
             availableSizes: req.body.availableSizes ? (Array.isArray(req.body.availableSizes) ? req.body.availableSizes : [req.body.availableSizes]) : [],
             availableColors: req.body.availableColors ? (Array.isArray(req.body.availableColors) ? req.body.availableColors : [req.body.availableColors]) : [],
-            imageUrl: imageUrl,
-            imageUrls: imageUrls,
-            videoUrl: videoUrl
+            imageUrl: localImageUrl,
+            imageUrls: localImageUrls,
+            videoUrl: localVideoUrl
         });
 
         const savedProduct = await newProduct.save();
         res.status(201).json(savedProduct);
+
+        // Process Cloudinary uploads in background
+        if (imageFiles.length > 0 || videoFiles.length > 0) {
+            processUploadsInBackground(savedProduct._id, imageFiles, videoFiles, req);
+        }
     } catch (err) {
         console.error('Error in adding product:', err);
         res.status(500).json({ message: 'Failed to add product', error: err.message });
@@ -220,19 +335,30 @@ router.put('/edit/:id', productUpload, async (req, res) => {
         const imageFiles = req.files && req.files.images ? req.files.images : [];
         const videoFiles = req.files && req.files.video ? req.files.video : [];
 
-        const newImageUrls = await Promise.all(imageFiles.map(file => uploadToCloudinary(file, req)));
-        product.imageUrls = [...currentUrls, ...newImageUrls];
+        // Generate local static URLs for new images
+        const host = req ? req.get('host') : 'localhost:5000';
+        const protocol = req ? req.protocol : 'http';
+        const newLocalImageUrls = imageFiles.map(file => `${protocol}://${host}/uploads/${file.filename}`);
+
+        product.imageUrls = [...currentUrls, ...newLocalImageUrls];
         product.imageUrl = product.imageUrls[0] || '';
 
         // Handle videoUrl update
+        let newLocalVideoUrl = '';
         if (videoFiles.length > 0) {
-            product.videoUrl = await uploadToCloudinary(videoFiles[0], req);
+            newLocalVideoUrl = `${protocol}://${host}/uploads/${videoFiles[0].filename}`;
+            product.videoUrl = newLocalVideoUrl;
         } else if (req.body.existingVideoUrl !== undefined) {
             product.videoUrl = req.body.existingVideoUrl;
         }
 
         const updatedProduct = await product.save();
         res.status(200).json(updatedProduct);
+
+        // Process Cloudinary uploads in background for new files
+        if (imageFiles.length > 0 || videoFiles.length > 0) {
+            processUploadsInBackground(updatedProduct._id, imageFiles, videoFiles, req);
+        }
     } catch (err) {
         console.error('Error in editing product:', err);
         res.status(500).json({ message: 'Failed to edit product', error: err.message });
