@@ -233,7 +233,25 @@ router.post('/add', productUpload, async (req, res) => {
 // 2. Saare products fetch karne ke liye (GET)
 router.get('/', async (req, res) => {
     try {
-        const products = await Product.find();
+        const { limit, cursor, category } = req.query;
+        let query = {};
+
+        if (category && category !== 'All') {
+            query.category = category;
+        }
+
+        // Using $lt because we sort by _id descending (newest first)
+        if (cursor) {
+            query._id = { $lt: cursor };
+        }
+
+        let productsQuery = Product.find(query).sort({ _id: -1 });
+
+        if (limit) {
+            productsQuery = productsQuery.limit(parseInt(limit));
+        }
+
+        const products = await productsQuery;
         res.status(200).json(products);
     } catch (err) {
         res.status(500).json(err);
