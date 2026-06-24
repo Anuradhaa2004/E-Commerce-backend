@@ -12,6 +12,9 @@ const razorpay = new Razorpay({
 
 // Route 1: Create Order ID (POST)
 router.post('/order', async (req, res) => {
+  console.log('Received order creation request with body:', req.body);
+  console.log('Razorpay Key ID:', razorpay.key_id);
+  console.log('Razorpay Secret length:', razorpay.key_secret.length);
   try {
     const { amount, currency = 'INR', receipt } = req.body;
     
@@ -26,6 +29,7 @@ router.post('/order', async (req, res) => {
     };
 
     const order = await razorpay.orders.create(options);
+  console.log('Razorpay order created:', order);
     if (!order) {
       return res.status(500).json({ message: 'Failed to generate order ID' });
     }
