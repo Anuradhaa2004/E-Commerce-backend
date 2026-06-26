@@ -38,7 +38,8 @@ const upload = multer({ storage, fileFilter, limits: { fileSize: 100 * 1024 * 10
 // Middleware to handle multiple files from different fields
 const productUpload = upload.fields([
     { name: 'images', maxCount: 10 },
-    { name: 'video', maxCount: 1 }
+    { name: 'video', maxCount: 1 },
+    { name: 'colorImages', maxCount: 20 }
 ]);
 
 const cloudinary = require('cloudinary').v2;
@@ -141,17 +142,49 @@ const processUploadsInBackground = async (productId, imageFiles, videoFiles, req
 
         // Update product's imageUrls
         let urlsUpdated = false;
-        product.imageUrls = product.imageUrls.map(url => {
-            if (url.startsWith(localPrefix)) {
-                const filename = url.substring(localPrefix.length);
-                const fileIndex = imageFiles.findIndex(f => f.filename === filename);
-                if (fileIndex !== -1 && cloudinaryImageUrls[fileIndex]) {
-                    urlsUpdated = true;
-                    return cloudinaryImageUrls[fileIndex];
+        if (product.imageUrls) {
+            product.imageUrls = product.imageUrls.map(url => {
+                if (url && url.startsWith(localPrefix)) {
+                    const filename = url.substring(localPrefix.length);
+                    const fileIndex = imageFiles.findIndex(f => f.filename === filename);
+                    if (fileIndex !== -1 && cloudinaryImageUrls[fileIndex]) {
+                        urlsUpdated = true;
+                        return cloudinaryImageUrls[fileIndex];
+                    }
                 }
-            }
-            return url;
-        });
+                return url;
+            });
+        }
+
+        // Update colorVariants image URLs
+        if (product.colorVariants && product.colorVariants.length > 0) {
+            product.colorVariants = product.colorVariants.map(variant => {
+                if (variant.imageUrl && variant.imageUrl.startsWith(localPrefix)) {
+                    const filename = variant.imageUrl.substring(localPrefix.length);
+                    // Check if it's in imageFiles (or colorImages which we'll combine)
+                    const fileIndex = imageFiles.findIndex(f => f.filename === filename);
+                    if (fileIndex !== -1 && cloudinaryImageUrls[fileIndex]) {
+                        urlsUpdated = true;
+                        variant.imageUrl = cloudinaryImageUrls[fileIndex];
+                    }
+                }
+                
+                if (variant.imageUrls && variant.imageUrls.length > 0) {
+                    variant.imageUrls = variant.imageUrls.map(url => {
+                        if (url && url.startsWith(localPrefix)) {
+                            const filename = url.substring(localPrefix.length);
+                            const fileIndex = imageFiles.findIndex(f => f.filename === filename);
+                            if (fileIndex !== -1 && cloudinaryImageUrls[fileIndex]) {
+                                urlsUpdated = true;
+                                return cloudinaryImageUrls[fileIndex];
+                            }
+                        }
+                        return url;
+                    });
+                }
+                return variant;
+            });
+        }
 
         // Update main imageUrl if it was a local URL
         if (product.imageUrl && product.imageUrl.startsWith(localPrefix)) {
@@ -191,6 +224,7 @@ const processUploadsInBackground = async (productId, imageFiles, videoFiles, req
 router.post('/add', productUpload, async (req, res) => {
     try {
         const imageFiles = req.files && req.files.images ? req.files.images : [];
+        const colorImageFiles = req.files && req.files.colorImages ? req.files.colorImages : [];
         const videoFiles = req.files && req.files.video ? req.files.video : [];
 
         // Save local paths first
@@ -203,6 +237,36 @@ router.post('/add', productUpload, async (req, res) => {
         if (videoFiles.length > 0) {
             localVideoUrl = `${protocol}://${host}/uploads/${videoFiles[0].filename}`;
         }
+        
+        // Parse colorVariants
+        let parsedColorVariants = [];
+        if (req.body.colorVariants) {
+            try {
+                parsedColorVariants = JSON.parse(req.body.colorVariants);
+                let newFileIndex = 0;
+                parsedColorVariants = parsedColorVariants.map((variant) => {
+                    const count = variant.newFileCount || 0;
+                    if (count > 0) {
+                        const variantUrls = [];
+                        for (let i = 0; i < count; i++) {
+                            if (colorImageFiles[newFileIndex]) {
+                                variantUrls.push(`${protocol}://${host}/uploads/${colorImageFiles[newFileIndex].filename}`);
+                            }
+                            newFileIndex++;
+                        }
+                        if (variantUrls.length > 0) {
+                            variant.imageUrls = (variant.imageUrls || []).concat(variantUrls);
+                            if (!variant.imageUrl) {
+                                variant.imageUrl = variant.imageUrls[0];
+                            }
+                        }
+                    }
+                    return variant;
+                });
+            } catch (e) {
+                console.error("Error parsing colorVariants:", e);
+            }
+        }
 
         const newProduct = new Product({
             name: req.body.name,
@@ -212,7 +276,8 @@ router.post('/add', productUpload, async (req, res) => {
             stock: parseInt(req.body.stock) || 0,
             availableSizes: req.body.availableSizes ? (Array.isArray(req.body.availableSizes) ? req.body.availableSizes : [req.body.availableSizes]) : [],
             availableColors: req.body.availableColors ? (Array.isArray(req.body.availableColors) ? req.body.availableColors : [req.body.availableColors]) : [],
-            imageUrl: localImageUrl,
+            colorVariants: parsedColorVariants,
+            imageUrl: localImageUrl || (parsedColorVariants.length > 0 ? parsedColorVariants[0].imageUrl : ''),
             imageUrls: localImageUrls,
             videoUrl: localVideoUrl
         });
@@ -220,9 +285,12 @@ router.post('/add', productUpload, async (req, res) => {
         const savedProduct = await newProduct.save();
         res.status(201).json(savedProduct);
 
+        // Combine all images for background upload
+        const allImagesToUpload = [...imageFiles, ...colorImageFiles];
+
         // Process Cloudinary uploads in background
-        if (imageFiles.length > 0 || videoFiles.length > 0) {
-            processUploadsInBackground(savedProduct._id, imageFiles, videoFiles, req);
+        if (allImagesToUpload.length > 0 || videoFiles.length > 0) {
+            processUploadsInBackground(savedProduct._id, allImagesToUpload, videoFiles, req);
         }
     } catch (err) {
         console.error('Error in adding product:', err);
@@ -351,7 +419,50 @@ router.put('/edit/:id', productUpload, async (req, res) => {
 
         // Append new uploaded images
         const imageFiles = req.files && req.files.images ? req.files.images : [];
+        const colorImageFiles = req.files && req.files.colorImages ? req.files.colorImages : [];
         const videoFiles = req.files && req.files.video ? req.files.video : [];
+
+        // Parse colorVariants
+        let parsedColorVariants = [];
+        if (req.body.colorVariants) {
+            try {
+                parsedColorVariants = JSON.parse(req.body.colorVariants);
+                // The frontend should pass existing variants with `imageUrl`.
+                // For new variants or updated ones, it should pass them in order 
+                // of `colorImageFiles` if they are new files, but wait:
+                // Handling mapping for edits is tricky if we mix old and new files.
+                // Assuming the frontend passes `{ colorName: 'Red', imageUrl: '...', isNewFile: true/false }`
+                // But let's just keep it simple: the frontend uploads the complete new set of `colorVariants`.
+                // If a variant has a new file, the frontend will append it to `colorImages` and the backend will map it.
+                // Let's assume the frontend sends the variants in order, and `colorImageFiles` contains only the new files.
+                // To properly map, the frontend can pass an index.
+                let newFileIndex = 0;
+                parsedColorVariants = parsedColorVariants.map((variant) => {
+                    const count = variant.newFileCount || 0;
+                    if (!variant.imageUrls) variant.imageUrls = [];
+                    
+                    if (count > 0) {
+                        const variantUrls = [];
+                        for (let i = 0; i < count; i++) {
+                            if (colorImageFiles[newFileIndex]) {
+                                const host = req ? req.get('host') : 'localhost:5000';
+                                const protocol = req ? req.protocol : 'http';
+                                variantUrls.push(`${protocol}://${host}/uploads/${colorImageFiles[newFileIndex].filename}`);
+                            }
+                            newFileIndex++;
+                        }
+                        variant.imageUrls = variant.imageUrls.concat(variantUrls);
+                    }
+                    if (variant.imageUrls.length > 0 && !variant.imageUrl) {
+                        variant.imageUrl = variant.imageUrls[0];
+                    }
+                    return variant;
+                });
+                product.colorVariants = parsedColorVariants;
+            } catch (e) {
+                console.error("Error parsing colorVariants:", e);
+            }
+        }
 
         // Generate local static URLs for new images
         const host = req ? req.get('host') : 'localhost:5000';
@@ -359,7 +470,8 @@ router.put('/edit/:id', productUpload, async (req, res) => {
         const newLocalImageUrls = imageFiles.map(file => `${protocol}://${host}/uploads/${file.filename}`);
 
         product.imageUrls = [...currentUrls, ...newLocalImageUrls];
-        product.imageUrl = product.imageUrls[0] || '';
+        // fallback image is first of regular images or first of color variants
+        product.imageUrl = product.imageUrls[0] || (product.colorVariants && product.colorVariants.length > 0 ? product.colorVariants[0].imageUrl : '');
 
         // Handle videoUrl update
         let newLocalVideoUrl = '';
@@ -374,8 +486,9 @@ router.put('/edit/:id', productUpload, async (req, res) => {
         res.status(200).json(updatedProduct);
 
         // Process Cloudinary uploads in background for new files
-        if (imageFiles.length > 0 || videoFiles.length > 0) {
-            processUploadsInBackground(updatedProduct._id, imageFiles, videoFiles, req);
+        const allImagesToUpload = [...imageFiles, ...colorImageFiles];
+        if (allImagesToUpload.length > 0 || videoFiles.length > 0) {
+            processUploadsInBackground(updatedProduct._id, allImagesToUpload, videoFiles, req);
         }
     } catch (err) {
         console.error('Error in editing product:', err);

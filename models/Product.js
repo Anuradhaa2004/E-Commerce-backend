@@ -10,7 +10,14 @@ const productSchema = new mongoose.Schema({
     videoUrl: { type: String },
     stock: { type: Number, default: 0 }, // Stock quantity
     availableSizes: { type: [String], default: [] }, // Sizes available for the product
-    availableColors: { type: [String], default: [] }, // Colors available for the product
+    availableColors: { type: [String], default: [] }, // Colors available for the product (legacy/fallback)
+    colorVariants: [
+        {
+            colorName: { type: String, required: true },
+            imageUrl: { type: String }, // Legacy/first image fallback
+            imageUrls: { type: [String], default: [] } // New array for multiple images
+        }
+    ], // Specific images mapped to colors
     reviews: [
         {
             userName: { type: String, default: 'Anonymous' },
