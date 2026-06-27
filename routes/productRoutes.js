@@ -272,6 +272,7 @@ router.post('/add', productUpload, async (req, res) => {
             name: req.body.name,
             description: req.body.description,
             price: parseFloat(req.body.price),
+            originalPrice: parseFloat(req.body.originalPrice) || parseFloat(req.body.price),
             category: req.body.category,
             stock: parseInt(req.body.stock) || 0,
             availableSizes: req.body.availableSizes ? (Array.isArray(req.body.availableSizes) ? req.body.availableSizes : [req.body.availableSizes]) : [],
@@ -391,6 +392,7 @@ router.put('/edit/:id', productUpload, async (req, res) => {
         product.name = req.body.name || product.name;
         product.description = req.body.description || product.description;
         if (req.body.price) product.price = parseFloat(req.body.price);
+        if (req.body.originalPrice) product.originalPrice = parseFloat(req.body.originalPrice);
         product.category = req.body.category || product.category;
         if (req.body.stock !== undefined) product.stock = parseInt(req.body.stock) || 0;
 

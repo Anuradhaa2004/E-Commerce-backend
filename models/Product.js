@@ -4,6 +4,7 @@ const productSchema = new mongoose.Schema({
     name: { type: String, required: true },
     description: { type: String, required: true },
     price: { type: Number, required: true },
+    originalPrice: { type: Number },
     category: { type: String, required: true },
     imageUrl: { type: String }, // First image as fallback
     imageUrls: { type: [String], default: [] },
