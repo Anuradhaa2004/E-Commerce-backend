@@ -24,4 +24,6 @@ const orderSchema = new mongoose.Schema({
   timestamps: true
 });
 
+orderSchema.index({ email: 1 });
+
 module.exports = mongoose.model('Order', orderSchema);

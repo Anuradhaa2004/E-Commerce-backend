@@ -5,6 +5,7 @@ require('dotenv').config({ path: path.resolve(__dirname, '.env') });
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
+const compression = require('compression');
 
 // Routes import karein
 const productRoutes = require('./routes/productRoutes');
@@ -18,9 +19,14 @@ const addressRoutes = require('./routes/addressRoutes');
 const app = express();
 
 // Middleware
+app.use(compression());
 app.use(express.json());
 app.use(cors());
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+app.use('/uploads', express.static(path.join(__dirname, 'uploads'), {
+    maxAge: '30d',
+    etag: true,
+    lastModified: true
+}));
 
 // Routes Integration
 app.use('/api/products', productRoutes);
