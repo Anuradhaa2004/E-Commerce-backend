@@ -25,12 +25,27 @@ const storage = multer.diskStorage({
 
 const fileFilter = (req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase();
-    const isImage = /jpeg|jpg|png|webp|gif/.test(ext) || file.mimetype.startsWith('image/');
-    const isVideo = /mp4|webm|ogg|mov|mkv|avi/.test(ext) || file.mimetype.startsWith('video/');
-    if (isImage || isVideo) {
-        return cb(null, true);
+    
+    // Check if the file belongs to an image field
+    const isImageField = file.fieldname === 'images' || file.fieldname === 'colorImages';
+    const isVideoField = file.fieldname === 'video';
+
+    if (isImageField) {
+        if (ext === '.webp' || file.mimetype === 'image/webp') {
+            return cb(null, true);
+        }
+        return cb(new Error('Only WebP image files (.webp) are allowed!'));
     }
-    cb(new Error('Only image and video files are allowed!'));
+
+    if (isVideoField) {
+        const isVideo = /mp4|webm|ogg|mov|mkv|avi/.test(ext) || file.mimetype.startsWith('video/');
+        if (isVideo) {
+            return cb(null, true);
+        }
+        return cb(new Error('Only video files are allowed!'));
+    }
+
+    cb(new Error('Invalid upload field!'));
 };
 
 const upload = multer({ storage, fileFilter, limits: { fileSize: 100 * 1024 * 1024 } }); // 100MB max for videos
