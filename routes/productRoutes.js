@@ -72,6 +72,26 @@ const uploadToCloudinary = async (file, req) => {
         process.env.CLOUDINARY_API_KEY &&
         process.env.CLOUDINARY_API_SECRET;
 
+    if (!file || !file.path || !fs.existsSync(file.path)) {
+        return '';
+    }
+
+    // Check size and type
+    try {
+        const stats = fs.statSync(file.path);
+        if (stats.size === 0) {
+            if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
+            return '';
+        }
+        const validMimetypes = ['image/jpeg', 'image/png', 'image/webp'];
+        if (!validMimetypes.includes(file.mimetype)) {
+            if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
+            return '';
+        }
+    } catch (e) {
+        return '';
+    }
+
     if (isCloudinaryConfigured) {
         try {
             const result = await cloudinary.uploader.upload(file.path, {
@@ -104,6 +124,29 @@ const uploadToCloudinaryDirect = async (file) => {
 
     if (!isCloudinaryConfigured) {
         console.log('[Background Upload] Cloudinary is not configured.');
+        return null;
+    }
+
+    if (!file || !file.path || !fs.existsSync(file.path)) {
+        console.error('[Background Upload] File path does not exist.');
+        return null;
+    }
+
+    // Check size and type
+    try {
+        const stats = fs.statSync(file.path);
+        if (stats.size === 0) {
+            console.error('[Background Upload] File is empty (0 bytes).');
+            if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
+            return null;
+        }
+        const validMimetypes = ['image/jpeg', 'image/png', 'image/webp'];
+        if (!validMimetypes.includes(file.mimetype)) {
+            console.error('[Background Upload] Invalid mimetype:', file.mimetype);
+            if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
+            return null;
+        }
+    } catch (e) {
         return null;
     }
 
@@ -235,9 +278,55 @@ const processUploadsInBackground = async (productId, imageFiles, videoFiles, req
     }
 };
 
+const validateUploadedImages = (files) => {
+    if (!files) return true;
+    const imageFields = ['images', 'colorImages'];
+    for (const field of imageFields) {
+        if (files[field]) {
+            for (const file of files[field]) {
+                if (!file || !file.path || !fs.existsSync(file.path)) {
+                    return false;
+                }
+                try {
+                    const stats = fs.statSync(file.path);
+                    if (stats.size === 0) return false;
+                    const validMimetypes = ['image/jpeg', 'image/png', 'image/webp'];
+                    if (!validMimetypes.includes(file.mimetype)) return false;
+                } catch (e) {
+                    return false;
+                }
+            }
+        }
+    }
+    return true;
+};
+
 // 1. Add new product (POST) — accepts up to 10 images
 router.post('/add', productUpload, async (req, res) => {
     try {
+        // Validate that at least one image is uploaded
+        const hasImages = req.files && (
+            (req.files.images && req.files.images.length > 0) || 
+            (req.files.colorImages && req.files.colorImages.length > 0)
+        );
+        if (!hasImages) {
+            return res.status(400).json({ message: 'Product image is required. Please upload at least one image.' });
+        }
+
+        // Validate that all uploaded image files exist, are not empty (size > 0), and have valid mime types
+        if (!validateUploadedImages(req.files)) {
+            // Clean up temporary files before sending response
+            if (req.files) {
+                const allFiles = [...(req.files.images || []), ...(req.files.colorImages || []), ...(req.files.video || [])];
+                allFiles.forEach(file => {
+                    if (file && file.path && fs.existsSync(file.path)) {
+                        fs.unlinkSync(file.path);
+                    }
+                });
+            }
+            return res.status(400).json({ message: 'Invalid or empty image file uploaded. Only valid jpeg, png, or webp images are allowed.' });
+        }
+
         const imageFiles = req.files && req.files.images ? req.files.images : [];
         const colorImageFiles = req.files && req.files.colorImages ? req.files.colorImages : [];
         const videoFiles = req.files && req.files.video ? req.files.video : [];
@@ -401,6 +490,18 @@ router.put('/edit/:id', productUpload, async (req, res) => {
         const product = await Product.findById(req.params.id);
         if (!product) {
             return res.status(404).json({ message: 'Product not found' });
+        }
+
+        // Validate that all uploaded image files exist, are not empty (size > 0), and have valid mime types
+        if (req.files && !validateUploadedImages(req.files)) {
+            // Clean up temporary files before sending response
+            const allFiles = [...(req.files.images || []), ...(req.files.colorImages || []), ...(req.files.video || [])];
+            allFiles.forEach(file => {
+                if (file && file.path && fs.existsSync(file.path)) {
+                    fs.unlinkSync(file.path);
+                }
+            });
+            return res.status(400).json({ message: 'Invalid or empty image file uploaded. Only valid jpeg, png, or webp images are allowed.' });
         }
 
         // Update basic details
