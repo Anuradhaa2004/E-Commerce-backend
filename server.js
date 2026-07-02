@@ -56,6 +56,11 @@ const connectDB = async () => {
 };
 
 connectDB();
+
+app.get('/ping', (req, res) => {
+    res.status(200).send('I am alive');
+});
+
 app.get('/', (req, res) => res.send('Backend is running successfully!'));
 app.listen(process.env.PORT || 5000, () => {
     console.log(`Server is running on port ${process.env.PORT || 5000}`);
