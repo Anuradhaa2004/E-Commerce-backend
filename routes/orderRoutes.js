@@ -30,9 +30,17 @@ router.get('/user/:email', async (req, res) => {
 router.put('/:orderId/cancel', async (req, res) => {
   try {
     const { orderId } = req.params;
+    const { cancellationReason, cancellationComment } = req.body;
     const order = await Order.findOneAndUpdate(
       { orderId },
-      { status: 'Cancelled' },
+      {
+        status: 'Cancelled',
+        cancellationDetails: {
+          reason:    cancellationReason || 'Not specified',
+          comment:   cancellationComment || '',
+          timestamp: new Date()
+        }
+      },
       { new: true }
     );
     if (!order) {

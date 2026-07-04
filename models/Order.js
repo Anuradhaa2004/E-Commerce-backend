@@ -19,7 +19,12 @@ const orderSchema = new mongoose.Schema({
   total: { type: Number, required: true },
   status: { type: String, default: 'Confirmed' },
   paymentMethod: { type: String, default: 'Cash on Delivery' },
-  date: { type: Date, default: Date.now }
+  date: { type: Date, default: Date.now },
+  cancellationDetails: {
+    reason:    { type: String, default: null },
+    comment:   { type: String, default: null },
+    timestamp: { type: Date, default: null }
+  }
 }, {
   timestamps: true
 });
