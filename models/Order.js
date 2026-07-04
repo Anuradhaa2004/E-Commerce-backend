@@ -24,7 +24,8 @@ const orderSchema = new mongoose.Schema({
     reason:    { type: String, default: null },
     comment:   { type: String, default: null },
     timestamp: { type: Date, default: null }
-  }
+  },
+  adminAcceptedAt: { type: Date, default: null }
 }, {
   timestamps: true
 });

@@ -26,6 +26,36 @@ router.get('/user/:email', async (req, res) => {
   }
 });
 
+// Get all orders (for Admin Dashboard)
+router.get('/all', async (req, res) => {
+  try {
+    const orders = await Order.find().sort({ createdAt: -1 });
+    res.status(200).json(orders);
+  } catch (error) {
+    console.error('Error fetching all orders:', error);
+    res.status(500).json({ message: 'Error fetching all orders', error: error.message });
+  }
+});
+
+// Accept an order (Admin Action)
+router.put('/:orderId/accept', async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    const order = await Order.findOneAndUpdate(
+      { orderId },
+      { adminAcceptedAt: new Date() },
+      { new: true }
+    );
+    if (!order) {
+      return res.status(404).json({ message: 'Order not found' });
+    }
+    res.status(200).json(order);
+  } catch (error) {
+    console.error('Error accepting order:', error);
+    res.status(500).json({ message: 'Error accepting order', error: error.message });
+  }
+});
+
 // Cancel an order
 router.put('/:orderId/cancel', async (req, res) => {
   try {
