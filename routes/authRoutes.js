@@ -123,7 +123,8 @@ router.post('/google-login', async (req, res) => {
                 name: user.name,
                 email: user.email,
                 role: user.role,
-                mobile: user.mobile
+                mobile: user.mobile,
+                avatar: user.avatar
             }
         });
     } catch (error) {
@@ -138,9 +139,9 @@ router.post('/google-login', async (req, res) => {
 // Update Profile / Complete Profile Route
 router.post('/update-profile', async (req, res) => {
     try {
-        const { userId, mobile } = req.body;
-        if (!userId || !mobile) {
-            return res.status(400).json({ message: 'User ID and Mobile number are required.' });
+        const { userId, mobile, avatar } = req.body;
+        if (!userId) {
+            return res.status(400).json({ message: 'User ID is required.' });
         }
 
         const user = await User.findById(userId);
@@ -148,7 +149,12 @@ router.post('/update-profile', async (req, res) => {
             return res.status(404).json({ message: 'User not found.' });
         }
 
-        user.mobile = mobile;
+        if (mobile !== undefined) {
+            user.mobile = mobile;
+        }
+        if (avatar !== undefined) {
+            user.avatar = avatar;
+        }
         await user.save();
 
         res.status(200).json({
@@ -158,7 +164,8 @@ router.post('/update-profile', async (req, res) => {
                 name: user.name,
                 email: user.email,
                 role: user.role,
-                mobile: user.mobile
+                mobile: user.mobile,
+                avatar: user.avatar
             }
         });
     } catch (error) {

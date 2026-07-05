@@ -6,6 +6,7 @@ const userSchema = new mongoose.Schema({
     password: { type: String },
     role: { type: String, enum: ['user', 'admin'], default: 'user' },
     mobile: { type: String },
+    avatar: { type: String },
     isVerified: { type: Boolean, default: false },
     otp: { type: String },
     otpExpires: { type: Date },
