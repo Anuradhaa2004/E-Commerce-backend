@@ -156,4 +156,43 @@ const sendEmailConfirmation = async (orderData) => {
     }
 };
 
-module.exports = { sendEmailConfirmation };
+// Fallback notification when Shipway cancellation fails
+const sendCancellationEmail = async ({ orderId, reason, comment }) => {
+  try {
+    const smtpUser = process.env.SMTP_USER;
+    const smtpPass = process.env.SMTP_PASS;
+    if (!smtpUser || !smtpPass || smtpPass === 'YOUR_GMAIL_APP_PASSWORD_HERE') {
+      console.warn('SMTP credentials not configured. Skipping cancellation email.');
+      return { success: false, message: 'SMTP not configured' };
+    }
+    const adminEmail = process.env.ADMIN_EMAIL || smtpUser;
+    const transporter = require('nodemailer').createTransport({
+      host: process.env.SMTP_HOST || 'smtp.gmail.com',
+      port: parseInt(process.env.SMTP_PORT || '465'),
+      secure: process.env.SMTP_PORT === '465',
+      auth: { user: smtpUser, pass: smtpPass }
+    });
+    const mailOptions = {
+      from: `"Ridhika Enterprises" <${smtpUser}>`,
+      to: adminEmail,
+      subject: `Shipway cancellation failed for Order #${orderId}`,
+      html: `
+        <div style="font-family: 'Inter', 'Helvetica Neue', Arial, sans-serif; background:#f7f9fa; padding:30px;">
+          <h2 style="color:#c94c4c;">⚠️ Shipway Cancellation Failure</h2>
+          <p>Order <strong>#${orderId}</strong> could not be cancelled via Shipway API.</p>
+          <p><strong>Reason:</strong> ${reason || 'N/A'}</p>
+          <p><strong>Comment:</strong> ${comment || 'N/A'}</p>
+          <p>Please take manual action to prevent shipment.</p>
+        </div>
+      `
+    };
+    const info = await transporter.sendMail(mailOptions);
+    console.log('Cancellation fallback email sent. MessageID:', info.messageId);
+    return { success: true, messageId: info.messageId };
+  } catch (err) {
+    console.error('Error sending cancellation fallback email:', err.message);
+    return { success: false, error: err.message };
+  }
+};
+
+module.exports = { sendEmailConfirmation, sendCancellationEmail };

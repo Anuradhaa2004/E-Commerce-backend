@@ -1,6 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const Order = require('../models/Order');
+const shipwayService = require('../services/shipwayService');
+const emailService = require('../services/emailService');
 
 // Create a new order
 router.post('/', async (req, res) => {
@@ -76,6 +78,19 @@ router.put('/:orderId/cancel', async (req, res) => {
     if (!order) {
       return res.status(404).json({ message: 'Order not found' });
     }
+    
+    // Trigger Shipway cancellation
+    const shipCancelResult = await shipwayService.cancelShipment(orderId, order.cancellationDetails);
+    if (!shipCancelResult.success) {
+      console.warn('Shipway cancellation failed, fallback needed:', shipCancelResult.error);
+      // Send fallback email to admin
+      await emailService.sendCancellationEmail({
+        orderId,
+        reason: order.cancellationDetails.reason,
+        comment: order.cancellationDetails.comment
+      });
+    }
+    
     res.status(200).json(order);
   } catch (error) {
     console.error('Error cancelling order:', error);
