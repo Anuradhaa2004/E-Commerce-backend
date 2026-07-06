@@ -34,7 +34,7 @@ const fileFilter = (req, file, cb) => {
         if (ext === '.webp' || file.mimetype === 'image/webp') {
             return cb(null, true);
         }
-        return cb(new Error('Only WebP image files (.webp) are allowed!'));
+        return cb(new Error('Invalid format! Please upload images in WebP format only to ensure optimal site performance.'));
     }
 
     if (isVideoField) {
