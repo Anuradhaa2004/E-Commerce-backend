@@ -145,28 +145,56 @@ router.post('/', handleUpload, async (req, res) => {
         const { Client, handle_file } = await import('@gradio/client');
 
         // Hugging Face Public Spaces for IDM-VTON
-        const hfSpaces = ["yisol/IDM-VTON", "Nymbo/Virtual-Try-On", "Nymbo/IDM-VTON", "wildvest/IDM-VTON"];
+        const hfSpaces = [
+            "yisol/IDM-VTON",
+            "Nymbo/Virtual-Try-On",
+            "Nymbo/IDM-VTON",
+            "zero-gpu-explorers/IDM-VTON",
+            "wildvest/IDM-VTON",
+            "kwaivgi/kling-vton"
+        ];
+
         let resultImageUrl = null;
         let lastError = null;
+        const hfToken = process.env.HF_TOKEN || process.env.HUGGINGFACE_TOKEN;
 
         for (const spaceName of hfSpaces) {
             try {
                 console.log(`[Virtual Try-On] Connecting to Hugging Face Space: ${spaceName}...`);
-                const app = await Client.connect(spaceName);
+                const clientOptions = {};
+                if (hfToken) {
+                    clientOptions.hf_token = hfToken;
+                }
+
+                const app = await Client.connect(spaceName, clientOptions);
 
                 // Prepare file inputs for Gradio Client
                 const humanImgInput = tempFilePath ? handle_file(tempFilePath) : handle_file(userImageUrl);
                 const garmentImgInput = handle_file(garmentImageUrl);
 
-                const result = await app.predict("/tryon", [
-                    { background: humanImgInput, layers: [], composite: null },
-                    garmentImgInput,
-                    garmentPromptDescription,
-                    true, // is_checked
-                    true, // is_checked_crop
-                    30,   // denoise_steps
-                    42    // seed
-                ]);
+                let result = null;
+                try {
+                    result = await app.predict("/tryon", [
+                        { background: humanImgInput, layers: [], composite: null },
+                        garmentImgInput,
+                        garmentPromptDescription,
+                        true, // is_checked
+                        true, // is_checked_crop
+                        30,   // denoise_steps
+                        42    // seed
+                    ]);
+                } catch (predErr) {
+                    console.warn(`[Virtual Try-On] Endpoint /tryon failed on ${spaceName}, trying index 0...`, predErr.message);
+                    result = await app.predict(0, [
+                        { background: humanImgInput, layers: [], composite: null },
+                        garmentImgInput,
+                        garmentPromptDescription,
+                        true,
+                        true,
+                        30,
+                        42
+                    ]);
+                }
 
                 if (result && result.data && result.data.length > 0) {
                     const first = result.data[0];
@@ -186,7 +214,7 @@ router.post('/', handleUpload, async (req, res) => {
                     }
                 }
             } catch (err) {
-                console.warn(`[Virtual Try-On] Space ${spaceName} failed or busy:`, err.message || err);
+                console.warn(`[Virtual Try-On] Space ${spaceName} unavailable or sleeping:`, err.message || err);
                 lastError = err;
             }
         }
@@ -221,7 +249,7 @@ router.post('/', handleUpload, async (req, res) => {
         }
 
         if (!resultImageUrl) {
-            throw new Error(lastError?.message || 'Free AI try-on servers are currently busy processing requests. Please try again in a few seconds.');
+            throw new Error('Free AI try-on servers are currently waking up from sleep. Please try again in 10-15 seconds.');
         }
 
         console.log('[Virtual Try-On] AI process completed successfully!');
@@ -233,9 +261,13 @@ router.post('/', handleUpload, async (req, res) => {
 
     } catch (error) {
         console.error('[Virtual Try-On Error]:', error.message || error);
+        let userFriendlyError = error.message || 'An error occurred during AI Virtual Try-On processing.';
+        if (userFriendlyError.includes('Space metadata could not be loaded') || userFriendlyError.includes('sleeping')) {
+            userFriendlyError = 'Free AI Try-On servers are currently waking up. Please click "Generate Try-On" again in a few seconds.';
+        }
         return res.status(500).json({
             success: false,
-            error: error.message || 'An error occurred during AI Virtual Try-On processing.'
+            error: userFriendlyError
         });
     } finally {
         if (tempFilePath && fs.existsSync(tempFilePath)) {
