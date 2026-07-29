@@ -41,6 +41,18 @@ const upload = multer({
     limits: { fileSize: 10 * 1024 * 1024 } // 10MB limit
 });
 
+// Multer error handling wrapper middleware
+const handleUpload = (req, res, next) => {
+    upload.single('user_image')(req, res, (err) => {
+        if (err instanceof multer.MulterError) {
+            return res.status(400).json({ success: false, error: `Upload error: ${err.message}` });
+        } else if (err) {
+            return res.status(400).json({ success: false, error: err.message });
+        }
+        next();
+    });
+};
+
 // Configure Cloudinary if environment variables exist
 if (process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY && process.env.CLOUDINARY_API_SECRET) {
     cloudinary.config({
@@ -86,7 +98,7 @@ const getAccessibleImageUrl = async (file, req) => {
  *   - product_image (URL string in body)
  *   - category (optional: 'upper_body', 'lower_body', 'dresses')
  */
-router.post('/', upload.single('user_image'), async (req, res) => {
+router.post('/', handleUpload, async (req, res) => {
     let tempFilePath = req.file ? req.file.path : null;
 
     try {
@@ -98,12 +110,19 @@ router.post('/', upload.single('user_image'), async (req, res) => {
             });
         }
 
-        const productImage = req.body.product_image;
-        if (!productImage) {
+        let garmentImageUrl = req.body.product_image;
+        if (!garmentImageUrl) {
             return res.status(400).json({
                 success: false,
                 error: 'Product garment image URL is required.'
             });
+        }
+
+        // Handle relative URLs for product image
+        if (garmentImageUrl && !garmentImageUrl.startsWith('http') && !garmentImageUrl.startsWith('data:')) {
+            const host = req.get('host');
+            const protocol = req.protocol;
+            garmentImageUrl = `${protocol}://${host}${garmentImageUrl.startsWith('/') ? '' : '/'}${garmentImageUrl}`;
         }
 
         let userImageUrl = req.body.user_image_url;
@@ -124,34 +143,46 @@ router.post('/', upload.single('user_image'), async (req, res) => {
 
         const replicate = new Replicate({ auth: token });
 
-        // Using IDM-VTON model on Replicate
-        // cuuupid/idm-vton or yzd-v/idm-vton model version
         const output = await replicate.run(
             "cuuupid/idm-vton:0513734a452173b8173e907e3a59d19a36266e55b48528559432bd21c7d7e985",
             {
                 input: {
                     human_img: userImageUrl,
                     garm_img: garmentImageUrl,
-                    category: "upper_body", // ya dress ke hisab se
+                    category: category || "upper_body",
                     crop: false,
                     seed: 42
                 }
             }
         );
+
         let resultImageUrl = null;
         if (Array.isArray(output) && output.length > 0) {
-            resultImageUrl = typeof output[0] === 'string' ? output[0] : (output[0].url ? output[0].url() : String(output[0]));
+            const first = output[0];
+            if (typeof first === 'string') {
+                resultImageUrl = first;
+            } else if (first && typeof first.url === 'function') {
+                resultImageUrl = first.url();
+            } else if (first && first.href) {
+                resultImageUrl = first.href;
+            } else {
+                resultImageUrl = String(first);
+            }
         } else if (typeof output === 'string') {
             resultImageUrl = output;
         } else if (output && typeof output.url === 'function') {
             resultImageUrl = output.url();
+        } else if (output && output.href) {
+            resultImageUrl = output.href;
+        } else if (output) {
+            resultImageUrl = String(output);
         }
 
         if (!resultImageUrl) {
             throw new Error('AI service completed but did not return a valid result image URL.');
         }
 
-        console.log('[Virtual Try-On] AI process completed successfully!');
+        console.log('[Virtual Try-On] AI process completed successfully! Result:', resultImageUrl);
 
         return res.status(200).json({
             success: true,
@@ -165,7 +196,6 @@ router.post('/', upload.single('user_image'), async (req, res) => {
             error: error.message || 'An error occurred during AI Virtual Try-On processing.'
         });
     } finally {
-        // Clean up temporary user image file from server disk
         if (tempFilePath && fs.existsSync(tempFilePath)) {
             fs.unlink(tempFilePath, (err) => {
                 if (err) console.error('Error removing temporary try-on file:', err);
