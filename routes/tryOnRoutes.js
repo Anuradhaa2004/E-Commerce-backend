@@ -3,7 +3,6 @@ const router = express.Router();
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const Replicate = require('replicate');
 const cloudinary = require('cloudinary').v2;
 
 // Ensure uploads directory exists for temp storage
@@ -63,7 +62,7 @@ if (process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY && proce
 }
 
 /**
- * Helper to get a publicly accessible URL or Data URI for Replicate input
+ * Helper to get a publicly accessible URL or Data URI for AI model input
  */
 const getAccessibleImageUrl = async (file, req) => {
     if (!file) return null;
@@ -85,7 +84,7 @@ const getAccessibleImageUrl = async (file, req) => {
         }
     }
 
-    // 2. Fallback: Data URI (Replicate API natively supports Data URIs!)
+    // 2. Fallback: Data URI
     const fileBuffer = fs.readFileSync(file.path);
     const mimeType = file.mimetype || 'image/jpeg';
     return `data:${mimeType};base64,${fileBuffer.toString('base64')}`;
@@ -93,23 +92,12 @@ const getAccessibleImageUrl = async (file, req) => {
 
 /**
  * POST /api/virtual-try-on
- * Accepts:
- *   - user_image (file upload via multipart form-data) OR user_image_url (body)
- *   - product_image (URL string in body)
- *   - category (optional: 'upper_body', 'lower_body', 'dresses')
+ * Uses 100% Free Hugging Face Spaces (Gradio Client) for IDM-VTON
  */
 router.post('/', handleUpload, async (req, res) => {
     let tempFilePath = req.file ? req.file.path : null;
 
     try {
-        const token = process.env.REPLICATE_API_TOKEN;
-        if (!token) {
-            return res.status(400).json({
-                success: false,
-                error: 'Replicate API token is not configured on the server. Please add REPLICATE_API_TOKEN to backend/.env file.'
-            });
-        }
-
         let garmentImageUrl = req.body.product_image;
         if (!garmentImageUrl) {
             return res.status(400).json({
@@ -130,7 +118,7 @@ router.post('/', handleUpload, async (req, res) => {
             userImageUrl = await getAccessibleImageUrl(req.file, req);
         }
 
-        if (!userImageUrl) {
+        if (!userImageUrl && !tempFilePath) {
             return res.status(400).json({
                 success: false,
                 error: 'Please upload a full-body user photo or provide a valid user image URL.'
@@ -139,50 +127,92 @@ router.post('/', handleUpload, async (req, res) => {
 
         const category = req.body.category || 'upper_body';
 
-        console.log(`[Virtual Try-On] Initiating AI processing with Replicate API for category: ${category}...`);
+        console.log(`[Virtual Try-On] Initiating 100% FREE AI processing via Hugging Face IDM-VTON Space for category: ${category}...`);
 
-        const replicate = new Replicate({ auth: token });
+        // Dynamically import @gradio/client
+        const { Client, handle_file } = await import('@gradio/client');
 
-        const output = await replicate.run(
-            "cuuupid/idm-vton:0513734a452173b8173e907e3a59d19a36266e55b48528559432bd21c7d7e985",
-            {
-                input: {
-                    human_img: userImageUrl,
-                    garm_img: garmentImageUrl,
-                    category: category || "upper_body",
-                    crop: false,
-                    seed: 42
-                }
-            }
-        );
-
+        // Hugging Face Public Spaces for IDM-VTON
+        const hfSpaces = ["yisol/IDM-VTON", "Nymbo/Virtual-Try-On", "Nymbo/IDM-VTON", "wildvest/IDM-VTON"];
         let resultImageUrl = null;
-        if (Array.isArray(output) && output.length > 0) {
-            const first = output[0];
-            if (typeof first === 'string') {
-                resultImageUrl = first;
-            } else if (first && typeof first.url === 'function') {
-                resultImageUrl = first.url();
-            } else if (first && first.href) {
-                resultImageUrl = first.href;
-            } else {
-                resultImageUrl = String(first);
+        let lastError = null;
+
+        for (const spaceName of hfSpaces) {
+            try {
+                console.log(`[Virtual Try-On] Connecting to Hugging Face Space: ${spaceName}...`);
+                const app = await Client.connect(spaceName);
+
+                // Prepare file inputs for Gradio Client
+                const humanImgInput = tempFilePath ? handle_file(tempFilePath) : handle_file(userImageUrl);
+                const garmentImgInput = handle_file(garmentImageUrl);
+
+                const result = await app.predict("/tryon", [
+                    { background: humanImgInput, layers: [], composite: null },
+                    garmentImgInput,
+                    req.body.garment_description || "fashion garment outfit",
+                    true, // is_checked
+                    true, // is_checked_crop
+                    30,   // denoise_steps
+                    42    // seed
+                ]);
+
+                if (result && result.data && result.data.length > 0) {
+                    const first = result.data[0];
+                    if (typeof first === 'string') {
+                        resultImageUrl = first;
+                    } else if (first && first.url) {
+                        resultImageUrl = first.url;
+                    } else if (first && first.path) {
+                        resultImageUrl = first.path;
+                    } else if (Array.isArray(first) && first[0]) {
+                        resultImageUrl = typeof first[0] === 'string' ? first[0] : (first[0].url || first[0].path);
+                    }
+
+                    if (resultImageUrl) {
+                        console.log(`[Virtual Try-On] Successfully generated try-on via ${spaceName}!`);
+                        break;
+                    }
+                }
+            } catch (err) {
+                console.warn(`[Virtual Try-On] Space ${spaceName} failed or busy:`, err.message || err);
+                lastError = err;
             }
-        } else if (typeof output === 'string') {
-            resultImageUrl = output;
-        } else if (output && typeof output.url === 'function') {
-            resultImageUrl = output.url();
-        } else if (output && output.href) {
-            resultImageUrl = output.href;
-        } else if (output) {
-            resultImageUrl = String(output);
+        }
+
+        // If Hugging Face spaces were busy, try Replicate fallback if API token exists
+        if (!resultImageUrl && process.env.REPLICATE_API_TOKEN) {
+            try {
+                console.log('[Virtual Try-On] Falling back to Replicate API...');
+                const Replicate = require('replicate');
+                const replicate = new Replicate({ auth: process.env.REPLICATE_API_TOKEN });
+                const output = await replicate.run(
+                    "cuuupid/idm-vton:0513734a452173b8173e907e3a59d19a36266e55b48528559432bd21c7d7e985",
+                    {
+                        input: {
+                            human_img: userImageUrl,
+                            garm_img: garmentImageUrl,
+                            category: category || "upper_body",
+                            crop: false,
+                            seed: 42
+                        }
+                    }
+                );
+                if (Array.isArray(output) && output.length > 0) {
+                    const first = output[0];
+                    resultImageUrl = typeof first === 'string' ? first : (first && typeof first.url === 'function' ? first.url() : String(first));
+                } else if (typeof output === 'string') {
+                    resultImageUrl = output;
+                }
+            } catch (repErr) {
+                console.warn('[Virtual Try-On] Replicate fallback failed:', repErr.message);
+            }
         }
 
         if (!resultImageUrl) {
-            throw new Error('AI service completed but did not return a valid result image URL.');
+            throw new Error(lastError?.message || 'Free AI try-on servers are currently busy processing requests. Please try again in a few seconds.');
         }
 
-        console.log('[Virtual Try-On] AI process completed successfully! Result:', resultImageUrl);
+        console.log('[Virtual Try-On] AI process completed successfully!');
 
         return res.status(200).json({
             success: true,
