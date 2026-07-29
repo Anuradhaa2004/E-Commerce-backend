@@ -280,14 +280,17 @@ router.post('/', handleUpload, async (req, res) => {
                 const humanImgInput = tempFilePath ? handle_file(tempFilePath) : handle_file(userImageUrl);
                 const garmentImgInput = handle_file(garmentImageUrl);
 
+                // Crop human image ONLY for upper_body tops. For dresses/kurtis and lower_body, keep false for full-body try-on!
+                const isCropHuman = itemCategory === 'upper_body';
+
                 let result = null;
                 try {
                     result = await app.predict("/tryon", [
                         { background: humanImgInput, layers: [], composite: null },
                         garmentImgInput,
                         garmentPromptDescription,
-                        true, // is_checked
-                        true, // is_checked_crop
+                        true, // is_checked (garment parsing)
+                        isCropHuman, // is_checked_crop (false for dresses/kurtis to fit full body!)
                         30,   // denoise_steps
                         42    // seed
                     ]);
@@ -298,7 +301,7 @@ router.post('/', handleUpload, async (req, res) => {
                         garmentImgInput,
                         garmentPromptDescription,
                         true,
-                        true,
+                        isCropHuman,
                         30,
                         42
                     ]);
