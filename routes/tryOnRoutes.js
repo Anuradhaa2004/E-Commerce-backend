@@ -98,7 +98,10 @@ router.post('/', handleUpload, async (req, res) => {
     let tempFilePath = req.file ? req.file.path : null;
 
     try {
-        let garmentImageUrl = req.body.product_image;
+        const { category, product_image, user_image_url, garment_description } = req.body;
+        const itemCategory = category || 'upper_body';
+
+        let garmentImageUrl = product_image || req.body.garmentImageUrl;
         if (!garmentImageUrl) {
             return res.status(400).json({
                 success: false,
@@ -113,7 +116,7 @@ router.post('/', handleUpload, async (req, res) => {
             garmentImageUrl = `${protocol}://${host}${garmentImageUrl.startsWith('/') ? '' : '/'}${garmentImageUrl}`;
         }
 
-        let userImageUrl = req.body.user_image_url;
+        let userImageUrl = user_image_url || req.body.humanImageUrl;
         if (req.file) {
             userImageUrl = await getAccessibleImageUrl(req.file, req);
         }
@@ -126,17 +129,17 @@ router.post('/', handleUpload, async (req, res) => {
         }
 
         let categoryPrompt = "a top, shirt, or upper body outfit";
-        if (category === 'dresses') {
+        if (itemCategory === 'dresses') {
             categoryPrompt = "a dress, full body outfit, kurta set, or gown";
-        } else if (category === 'lower_body') {
+        } else if (itemCategory === 'lower_body') {
             categoryPrompt = "pants, jeans, trousers, or lower body clothing";
         }
 
-        const garmentPromptDescription = req.body.garment_description 
-            ? `${req.body.garment_description}, ${categoryPrompt}` 
+        const garmentPromptDescription = garment_description 
+            ? `${garment_description}, ${categoryPrompt}` 
             : categoryPrompt;
 
-        console.log(`[Virtual Try-On] Initiating 100% FREE AI processing via Hugging Face IDM-VTON Space for category: ${category} ("${categoryPrompt}")...`);
+        console.log(`[Virtual Try-On] Initiating 100% FREE AI processing via Hugging Face IDM-VTON Space for category: ${itemCategory} ("${categoryPrompt}")...`);
 
         // Dynamically import @gradio/client
         const { Client, handle_file } = await import('@gradio/client');
@@ -200,7 +203,7 @@ router.post('/', handleUpload, async (req, res) => {
                         input: {
                             human_img: userImageUrl,
                             garm_img: garmentImageUrl,
-                            category: category || "upper_body",
+                            category: itemCategory || "upper_body",
                             crop: false,
                             seed: 42
                         }
