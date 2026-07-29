@@ -15,6 +15,7 @@ const cartRoutes = require('./routes/cartRoutes');
 const shipwayRoutes = require('./routes/shipwayRoutes');
 const orderRoutes = require('./routes/orderRoutes');
 const addressRoutes = require('./routes/addressRoutes');
+const tryOnRoutes = require('./routes/tryOnRoutes');
 
 const app = express();
 
@@ -37,6 +38,7 @@ app.use('/api/cart', cartRoutes);
 app.use('/api/shipway', shipwayRoutes);
 app.use('/api/orders', orderRoutes);
 app.use('/api/addresses', addressRoutes);
+app.use('/api/virtual-try-on', tryOnRoutes);
 
 // --- Yahan Cron Job Import Karein ---
 require('./cronJobs');
