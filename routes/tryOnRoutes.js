@@ -92,6 +92,78 @@ const getAccessibleImageUrl = async (file, req) => {
 
 /**
  * POST /api/virtual-try-on
+const { GoogleGenerativeAI } = require('@google/generative-ai');
+
+/**
+ * Smart Category Detector powered by Google Gemini Vision API
+ * Detects whether garment is 'upper_body', 'lower_body', or 'dresses'
+ */
+const detectCategoryWithGemini = async (garmentImageUrl, productCategory, productName) => {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) return null;
+
+    try {
+        const genAI = new GoogleGenerativeAI(apiKey);
+        const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+
+        const prompt = `Analyze this fashion garment product.
+Product Name: "${productName || ''}"
+Product Category: "${productCategory || ''}"
+
+Classify this item into EXACTLY ONE of these three categories for AI virtual try-on:
+1. "dresses" (Use for full-body outfits like dresses, kurta sets, kurtis, gowns, sarees, lehengas, suits, or two-piece sets).
+2. "lower_body" (Use for bottoms like pants, jeans, trousers, skirts, shorts, or lower-body clothing).
+3. "upper_body" (Use for tops, shirts, t-shirts, blouses, jackets, or upper-body clothing).
+
+REPLY ONLY WITH ONE EXACT WORD: either "dresses", "lower_body", or "upper_body". Do NOT add punctuation or extra words.`;
+
+        let imagePart = null;
+
+        if (garmentImageUrl && garmentImageUrl.startsWith('data:image/')) {
+            const matches = garmentImageUrl.match(/^data:(image\/[a-zA-Z]+);base64,(.+)$/);
+            if (matches) {
+                imagePart = {
+                    inlineData: {
+                        mimeType: matches[1],
+                        data: matches[2]
+                    }
+                };
+            }
+        } else if (garmentImageUrl && garmentImageUrl.startsWith('http')) {
+            try {
+                const response = await fetch(garmentImageUrl);
+                const arrayBuffer = await response.arrayBuffer();
+                const buffer = Buffer.from(arrayBuffer);
+                const mimeType = response.headers.get('content-type') || 'image/jpeg';
+                imagePart = {
+                    inlineData: {
+                        mimeType,
+                        data: buffer.toString('base64')
+                    }
+                };
+            } catch (fetchErr) {
+                console.warn('[Gemini Vision] Fetch image buffer failed:', fetchErr.message);
+            }
+        }
+
+        const contents = imagePart ? [prompt, imagePart] : [prompt];
+        const result = await model.generateContent(contents);
+        const rawText = result.response.text().trim().toLowerCase();
+
+        console.log(`[Gemini Smart Detector] Output: "${rawText}"`);
+
+        if (rawText.includes('dresses')) return 'dresses';
+        if (rawText.includes('lower_body') || rawText.includes('lower body')) return 'lower_body';
+        if (rawText.includes('upper_body') || rawText.includes('upper body')) return 'upper_body';
+
+    } catch (geminiErr) {
+        console.warn('[Gemini Smart Detector Warning]:', geminiErr.message || geminiErr);
+    }
+    return null;
+};
+
+/**
+ * POST /api/virtual-try-on
  * Uses 100% Free Hugging Face Spaces (Gradio Client) for IDM-VTON
  */
 router.post('/', handleUpload, async (req, res) => {
@@ -100,30 +172,6 @@ router.post('/', handleUpload, async (req, res) => {
     try {
         const { category, product_image, user_image_url, garment_description } = req.body;
         
-        // Smart category resolution for IDM-VTON model (dresses, lower_body, upper_body)
-        const resolveCategory = (catInput, descInput) => {
-            if (catInput && ['dresses', 'upper_body', 'lower_body'].includes(catInput)) {
-                return catInput;
-            }
-            const text = `${catInput || ''} ${descInput || ''}`.toLowerCase();
-            if (
-                text.includes('kurta') || text.includes('kurti') || text.includes('dress') ||
-                text.includes('saree') || text.includes('lehenga') || text.includes('gown') ||
-                text.includes('suit') || text.includes('set')
-            ) {
-                return 'dresses';
-            }
-            if (
-                text.includes('jeans') || text.includes('pant') || text.includes('trouser') ||
-                text.includes('skirt') || text.includes('lower') || text.includes('bottom')
-            ) {
-                return 'lower_body';
-            }
-            return 'upper_body';
-        };
-
-        const itemCategory = resolveCategory(category, garment_description);
-
         let garmentImageUrl = product_image || req.body.garmentImageUrl;
         if (!garmentImageUrl) {
             return res.status(400).json({
@@ -149,6 +197,43 @@ router.post('/', handleUpload, async (req, res) => {
                 success: false,
                 error: 'Please upload a full-body user photo or provide a valid user image URL.'
             });
+        }
+
+        // 1. Smart Category Detection via Gemini Vision API (if GEMINI_API_KEY set)
+        let itemCategory = category;
+        if (process.env.GEMINI_API_KEY) {
+            console.log('[Virtual Try-On] Invoking Google Gemini Vision for Smart Category Detection...');
+            const geminiCategory = await detectCategoryWithGemini(garmentImageUrl, category, garment_description);
+            if (geminiCategory) {
+                itemCategory = geminiCategory;
+                console.log(`[Virtual Try-On] ✨ Gemini Vision AI detected category: "${itemCategory}"`);
+            }
+        }
+
+        // 2. Keyword fallback if Gemini didn't return a category
+        const resolveCategory = (catInput, descInput) => {
+            if (catInput && ['dresses', 'upper_body', 'lower_body'].includes(catInput)) {
+                return catInput;
+            }
+            const text = `${catInput || ''} ${descInput || ''}`.toLowerCase();
+            if (
+                text.includes('kurta') || text.includes('kurti') || text.includes('dress') ||
+                text.includes('saree') || text.includes('lehenga') || text.includes('gown') ||
+                text.includes('suit') || text.includes('set')
+            ) {
+                return 'dresses';
+            }
+            if (
+                text.includes('jeans') || text.includes('pant') || text.includes('trouser') ||
+                text.includes('skirt') || text.includes('lower') || text.includes('bottom')
+            ) {
+                return 'lower_body';
+            }
+            return 'upper_body';
+        };
+
+        if (!itemCategory || !['dresses', 'upper_body', 'lower_body'].includes(itemCategory)) {
+            itemCategory = resolveCategory(category, garment_description);
         }
 
         let categoryPrompt = "a top, t-shirt, shirt, or upper body outfit";
