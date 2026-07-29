@@ -127,20 +127,17 @@ router.post('/', upload.single('user_image'), async (req, res) => {
         // Using IDM-VTON model on Replicate
         // cuuupid/idm-vton or yzd-v/idm-vton model version
         const output = await replicate.run(
-            "cuuupid/idm-vton:c87e7b9758a0bc6d8c47b593796582531d044ea598463c242ef99efb9a4c82b4",
+            "cuuupid/idm-vton:0513734a452173b8173e907e3a59d19a36266e55b48528559432bd21c7d7e985",
             {
                 input: {
                     human_img: userImageUrl,
-                    garm_img: productImage,
-                    garment_des: req.body.garment_description || "garment outfit",
-                    category: category,
+                    garm_img: garmentImageUrl,
+                    category: "upper_body", // ya dress ke hisab se
                     crop: false,
-                    seed: 42,
-                    steps: 30
+                    seed: 42
                 }
             }
         );
-
         let resultImageUrl = null;
         if (Array.isArray(output) && output.length > 0) {
             resultImageUrl = typeof output[0] === 'string' ? output[0] : (output[0].url ? output[0].url() : String(output[0]));
