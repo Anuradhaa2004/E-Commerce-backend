@@ -125,9 +125,18 @@ router.post('/', handleUpload, async (req, res) => {
             });
         }
 
-        const category = req.body.category || 'upper_body';
+        let categoryPrompt = "a top, shirt, or upper body outfit";
+        if (category === 'dresses') {
+            categoryPrompt = "a dress, full body outfit, kurta set, or gown";
+        } else if (category === 'lower_body') {
+            categoryPrompt = "pants, jeans, trousers, or lower body clothing";
+        }
 
-        console.log(`[Virtual Try-On] Initiating 100% FREE AI processing via Hugging Face IDM-VTON Space for category: ${category}...`);
+        const garmentPromptDescription = req.body.garment_description 
+            ? `${req.body.garment_description}, ${categoryPrompt}` 
+            : categoryPrompt;
+
+        console.log(`[Virtual Try-On] Initiating 100% FREE AI processing via Hugging Face IDM-VTON Space for category: ${category} ("${categoryPrompt}")...`);
 
         // Dynamically import @gradio/client
         const { Client, handle_file } = await import('@gradio/client');
@@ -149,7 +158,7 @@ router.post('/', handleUpload, async (req, res) => {
                 const result = await app.predict("/tryon", [
                     { background: humanImgInput, layers: [], composite: null },
                     garmentImgInput,
-                    req.body.garment_description || "fashion garment outfit",
+                    garmentPromptDescription,
                     true, // is_checked
                     true, // is_checked_crop
                     30,   // denoise_steps
