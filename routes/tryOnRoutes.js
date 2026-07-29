@@ -99,7 +99,30 @@ router.post('/', handleUpload, async (req, res) => {
 
     try {
         const { category, product_image, user_image_url, garment_description } = req.body;
-        const itemCategory = category || 'upper_body';
+        
+        // Smart category resolution for IDM-VTON model (dresses, lower_body, upper_body)
+        const resolveCategory = (catInput, descInput) => {
+            if (catInput && ['dresses', 'upper_body', 'lower_body'].includes(catInput)) {
+                return catInput;
+            }
+            const text = `${catInput || ''} ${descInput || ''}`.toLowerCase();
+            if (
+                text.includes('kurta') || text.includes('kurti') || text.includes('dress') ||
+                text.includes('saree') || text.includes('lehenga') || text.includes('gown') ||
+                text.includes('suit') || text.includes('set')
+            ) {
+                return 'dresses';
+            }
+            if (
+                text.includes('jeans') || text.includes('pant') || text.includes('trouser') ||
+                text.includes('skirt') || text.includes('lower') || text.includes('bottom')
+            ) {
+                return 'lower_body';
+            }
+            return 'upper_body';
+        };
+
+        const itemCategory = resolveCategory(category, garment_description);
 
         let garmentImageUrl = product_image || req.body.garmentImageUrl;
         if (!garmentImageUrl) {
@@ -128,9 +151,9 @@ router.post('/', handleUpload, async (req, res) => {
             });
         }
 
-        let categoryPrompt = "a top, shirt, or upper body outfit";
+        let categoryPrompt = "a top, t-shirt, shirt, or upper body outfit";
         if (itemCategory === 'dresses') {
-            categoryPrompt = "a dress, full body outfit, kurta set, or gown";
+            categoryPrompt = "a full body dress, kurta set, saree, or gown";
         } else if (itemCategory === 'lower_body') {
             categoryPrompt = "pants, jeans, trousers, or lower body clothing";
         }
@@ -139,7 +162,7 @@ router.post('/', handleUpload, async (req, res) => {
             ? `${garment_description}, ${categoryPrompt}` 
             : categoryPrompt;
 
-        console.log(`[Virtual Try-On] Initiating 100% FREE AI processing via Hugging Face IDM-VTON Space for category: ${itemCategory} ("${categoryPrompt}")...`);
+        console.log(`[Virtual Try-On] Processing category: ${itemCategory} (prompt: "${categoryPrompt}")...`);
 
         // Dynamically import @gradio/client
         const { Client, handle_file } = await import('@gradio/client');
