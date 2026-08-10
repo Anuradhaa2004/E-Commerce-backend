@@ -4,6 +4,9 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const cloudinary = require('cloudinary').v2;
+const axios = require('axios');
+const FormData = require('form-data');
+const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 // Ensure uploads directory exists for temp storage
 const uploadDir = path.join(__dirname, '../uploads');
@@ -163,10 +166,160 @@ REPLY ONLY WITH ONE EXACT WORD: either "dresses", "lower_body", or "upper_body".
 };
 
 /**
+ * Handler for POST /api/enhanced-try-on
+ * Analyzes posture and garment with Gemini Vision to generate an enhanced fabric draping prompt,
+ * then forwards request to the original try-on model at http://localhost:5000/api/virtual-try-on.
+ */
+const handleEnhancedTryOn = async (req, res) => {
+    let tempFilePath = req.file ? req.file.path : null;
+
+    try {
+        const { category, product_image_url, product_image, product_name, user_image_url } = req.body;
+        const garmentImageUrl = product_image_url || product_image;
+
+        if (!garmentImageUrl) {
+            return res.status(400).json({
+                success: false,
+                error: 'Product garment image URL is required.'
+            });
+        }
+
+        let userImageUrl = user_image_url;
+        if (req.file) {
+            userImageUrl = await getAccessibleImageUrl(req.file, req);
+        }
+
+        if (!userImageUrl && !tempFilePath) {
+            return res.status(400).json({
+                success: false,
+                error: 'Please upload a full-body user photo.'
+            });
+        }
+
+        // 1. Analyze posture & garment with Gemini Vision API
+        let enhancedDescription = `${product_name || ''} ${category || ''}`.trim();
+        const apiKey = process.env.GEMINI_API_KEY;
+
+        if (apiKey) {
+            try {
+                console.log('[Enhanced Try-On] Analyzing user posture & garment with Gemini Vision AI...');
+                const genAI = new GoogleGenerativeAI(apiKey);
+                const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+
+                const prompt = `Analyze this person's posture, body shape, shoulders, and waist line in the user photo.
+Garment Product Name: "${product_name || 'Fashion Item'}"
+Garment Category: "${category || 'upper_body'}"
+
+Write a highly detailed, realistic text prompt describing exactly how this ${product_name || 'garment'} should realistically drape, fit, fold, crease, and contour around this person's body posture, shoulders, waist, and arms. Include natural fabric weight, folds, and realistic textures matching their exact posture. Keep it concise (under 80 words).`;
+
+                let imagePart = null;
+                if (req.file) {
+                    const fileBuffer = fs.readFileSync(req.file.path);
+                    const mimeType = req.file.mimetype || 'image/jpeg';
+                    imagePart = {
+                        inlineData: {
+                            mimeType: mimeType,
+                            data: fileBuffer.toString('base64')
+                        }
+                    };
+                } else if (userImageUrl && userImageUrl.startsWith('data:image/')) {
+                    const matches = userImageUrl.match(/^data:(image\/[a-zA-Z]+);base64,(.+)$/);
+                    if (matches) {
+                        imagePart = {
+                            inlineData: {
+                                mimeType: matches[1],
+                                data: matches[2]
+                            }
+                        };
+                    }
+                } else if (userImageUrl && userImageUrl.startsWith('http')) {
+                    try {
+                        const imgRes = await fetch(userImageUrl);
+                        const arrBuf = await imgRes.arrayBuffer();
+                        const buf = Buffer.from(arrBuf);
+                        const mimeType = imgRes.headers.get('content-type') || 'image/jpeg';
+                        imagePart = {
+                            inlineData: {
+                                mimeType,
+                                data: buf.toString('base64')
+                            }
+                        };
+                    } catch (e) {
+                        console.warn('[Enhanced Try-On] Fetch user image buffer failed:', e.message);
+                    }
+                }
+
+                const contents = imagePart ? [prompt, imagePart] : [prompt];
+                const geminiResult = await model.generateContent(contents);
+                const rawDescription = geminiResult.response.text().trim();
+
+                if (rawDescription) {
+                    enhancedDescription = rawDescription;
+                    console.log(`[Enhanced Try-On] ✨ Gemini Vision generated enhanced prompt:\n"${enhancedDescription}"`);
+                }
+            } catch (geminiErr) {
+                console.warn('[Enhanced Try-On] Gemini Vision prompt generation warning:', geminiErr.message || geminiErr);
+            }
+        }
+
+        // 2. Forward original user_image, product_image, category, and enhanced description to original model
+        const port = process.env.PORT || 5000;
+        const originalEndpoint = `http://localhost:${port}/api/virtual-try-on`;
+
+        console.log(`[Enhanced Try-On] Forwarding request to original try-on model at ${originalEndpoint}...`);
+
+        const formData = new FormData();
+        if (req.file) {
+            formData.append('user_image', fs.createReadStream(req.file.path), {
+                filename: req.file.originalname || 'user_photo.jpg',
+                contentType: req.file.mimetype || 'image/jpeg'
+            });
+        } else if (user_image_url) {
+            formData.append('user_image_url', user_image_url);
+        }
+
+        formData.append('product_image', garmentImageUrl);
+        formData.append('category', category || 'upper_body');
+        formData.append('garment_description', enhancedDescription);
+        if (product_name) {
+            formData.append('product_name', product_name);
+        }
+
+        const response = await axios.post(originalEndpoint, formData, {
+            headers: {
+                ...formData.getHeaders()
+            },
+            timeout: 120000
+        });
+
+        // 3. Return final generated image response back to React frontend
+        return res.status(200).json(response.data);
+
+    } catch (error) {
+        console.error('[Enhanced Try-On Error]:', error.response?.data || error.message || error);
+        return res.status(error.response?.status || 500).json({
+            success: false,
+            error: error.response?.data?.error || error.message || 'Enhanced Virtual Try-On failed.'
+        });
+    } finally {
+        if (tempFilePath && fs.existsSync(tempFilePath)) {
+            fs.unlink(tempFilePath, (err) => {
+                if (err) console.error('Error removing temporary try-on file:', err);
+            });
+        }
+    }
+};
+
+router.post('/enhanced-try-on', handleUpload, handleEnhancedTryOn);
+
+/**
  * POST /api/virtual-try-on
  * Uses 100% Free Hugging Face Spaces (Gradio Client) for IDM-VTON
  */
 router.post('/', handleUpload, async (req, res) => {
+    if (req.baseUrl.includes('enhanced-try-on') || req.path.includes('enhanced')) {
+        return handleEnhancedTryOn(req, res);
+    }
     let tempFilePath = req.file ? req.file.path : null;
 
     try {

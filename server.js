@@ -39,6 +39,7 @@ app.use('/api/shipway', shipwayRoutes);
 app.use('/api/orders', orderRoutes);
 app.use('/api/addresses', addressRoutes);
 app.use('/api/virtual-try-on', tryOnRoutes);
+app.use('/api/enhanced-try-on', tryOnRoutes);
 
 // --- Yahan Cron Job Import Karein ---
 require('./cronJobs');
